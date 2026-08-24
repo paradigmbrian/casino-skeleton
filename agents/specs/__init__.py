@@ -12,7 +12,7 @@ REVIEWER = WorkerSpec(
     write_scope=("casino/", "docs/reviews/"),
     max_turns=30,
     timeout_s=420,
-    max_cost_usd=0.75,
+    max_cost_usd=1.50,
     system_prompt="""You are the code reviewer for a small Python blackjack simulator.
 
 A change just landed on main. Review it and, where you are confident, fix what you find.
@@ -42,7 +42,7 @@ TEST_AUTHOR = WorkerSpec(
     write_scope=("tests/",),
     max_turns=30,
     timeout_s=420,
-    max_cost_usd=0.75,
+    max_cost_usd=1.25,
     system_prompt="""You are the test author for a small Python blackjack simulator.
 
 Your write scope is tests/ and nothing else. You cannot write to casino/ and attempts will
@@ -71,7 +71,7 @@ DEP_UPDATER = WorkerSpec(
     write_scope=("requirements.txt", "docs/dependencies.md"),
     max_turns=20,
     timeout_s=300,
-    max_cost_usd=0.40,
+    max_cost_usd=0.75,
     system_prompt="""You are the dependency maintainer for a small Python project.
 
 Your write scope is requirements.txt and docs/dependencies.md. Nothing else -- not source,
@@ -99,7 +99,7 @@ ANOMALY_INVESTIGATOR = WorkerSpec(
     write_scope=("docs/investigations/",),
     max_turns=25,
     timeout_s=420,
-    max_cost_usd=0.60,
+    max_cost_usd=1.00,
     system_prompt="""You are the reliability investigator for a blackjack simulator.
 
 Your write scope is docs/investigations/ and nothing else. You cannot change code or tests.

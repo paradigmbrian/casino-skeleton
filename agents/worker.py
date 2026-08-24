@@ -16,6 +16,7 @@ from claude_agent_sdk import (
     TextBlock,
     query,
 )
+from claude_agent_sdk._errors import ResultError
 
 from agents.scope import in_scope
 
@@ -81,6 +82,34 @@ def make_scope_guard(write_scope: tuple[str, ...], worktree_path: Path | str):
     return guard
 
 
+# A run that ends at a limit is terminal, not transient: it spent its cap or its
+# turns reaching the same wall, and a retry spends them again to reach it twice.
+TERMINAL_REASONS = {"budget_exhausted": "budget_exhausted", "max_turns": "max_turns"}
+
+
+def outcome_from_result_error(exc: ResultError, text: str) -> AgentOutcome:
+    """Map a terminal CLI result onto an outcome that tells the truth about cost.
+
+    The SDK raises this *instead of* yielding a ResultMessage, so a naive
+    `except Exception` records $0.00 for a run that spent its entire budget --
+    and the hourly ceiling is computed by summing those numbers. Undercounting
+    there disables the one rail that bounds spend. The raw result payload hangs
+    off `.data`, so the real figures are available; use them."""
+    data = exc.data or {}
+    status = TERMINAL_REASONS.get(exc.terminal_reason or "", "error")
+    if status == "error" and exc.subtype == "error_max_budget_usd":
+        status = "budget_exhausted"  # belt and braces: subtype without terminal_reason
+    detail = {"budget_exhausted": "run stopped at its per-run budget ceiling",
+              "max_turns": "run stopped at its turn ceiling"}.get(status, repr(exc))
+    return AgentOutcome(
+        status=status,
+        summary=text[-2000:],
+        cost_usd=float(data.get("total_cost_usd") or 0.0),
+        num_turns=int(data.get("num_turns") or 0),
+        error=detail,
+    )
+
+
 def ensure_committed(worktree_path: Path, message: str) -> bool:
     """Commit anything the agent left uncommitted. Returns True if it committed."""
     status = subprocess.run(["git", "-C", str(worktree_path), "status", "--porcelain"],
@@ -142,6 +171,9 @@ async def run_agent(spec: WorkerSpec, prompt: str, worktree_path: Path,
     except asyncio.TimeoutError:
         return AgentOutcome("timeout", "\n".join(texts)[-2000:],
                             error=f"exceeded {spec.timeout_s}s")
+    except ResultError as exc:  # a limit was hit; the cost is real and must be recorded
+        LOG.warning("worker %s ended early: %s", spec.name, exc.terminal_reason or exc.subtype)
+        return outcome_from_result_error(exc, "\n".join(texts))
     except Exception as exc:  # SDK/CLI failures must not kill the supervisor
         LOG.exception("worker %s crashed", spec.name)
         return AgentOutcome("error", "\n".join(texts)[-2000:], error=repr(exc))

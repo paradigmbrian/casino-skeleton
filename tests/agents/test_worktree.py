@@ -71,3 +71,48 @@ def test_park_orphans_deletes_branches_with_nothing_on_them(temp_repo, tmp_path)
 
 def test_park_orphans_is_a_noop_when_nothing_was_left_behind(temp_repo, tmp_path):
     assert make_manager(temp_repo, tmp_path).park_orphans() == []
+
+
+def test_park_orphans_ignores_directories_that_are_not_worktrees(temp_repo, tmp_path):
+    """The merge gate keeps its integration worktrees in a subdirectory of the
+    worktree root. That directory is not itself a checkout, and code that runs
+    rmtree must not delete things it does not recognise."""
+    mgr = make_manager(temp_repo, tmp_path)
+    stray = mgr.worktree_root / "integration"
+    stray.mkdir(parents=True)
+    (stray / "keep.txt").write_text("not a worktree\n")
+
+    assert mgr.park_orphans() == []
+    assert stray.is_dir()
+    assert (stray / "keep.txt").exists()
+
+
+def test_park_orphans_finds_worktrees_nested_below_the_root(temp_repo, tmp_path):
+    """A crash mid-merge leaves a gate integration worktree one level deeper
+    than a worker's, so a flat scan of the root would miss it."""
+    mgr = make_manager(temp_repo, tmp_path)
+    nested = mgr.worktree_root / "integration" / "integration-abc123"
+    git(temp_repo, "worktree", "add", "-q", "--detach", str(nested), "main")
+    assert nested.is_dir()
+
+    mgr.park_orphans()
+    assert not nested.exists()
+
+
+def test_retire_keeps_a_branch_that_has_work(temp_repo, tmp_path):
+    mgr = make_manager(temp_repo, tmp_path)
+    wt = mgr.create("reviewer")
+    (wt.path / "casino" / "hand.py").write_text("VALUE = 22\n")
+    git(wt.path, "commit", "-qam", "review: something")
+
+    assert mgr.retire(wt) == wt.branch
+    assert not wt.path.exists()
+    assert wt.branch in git(temp_repo, "branch", "--list", wt.branch)
+
+
+def test_retire_discards_a_branch_with_nothing_on_it(temp_repo, tmp_path):
+    mgr = make_manager(temp_repo, tmp_path)
+    wt = mgr.create("reviewer")
+
+    assert mgr.retire(wt) is None
+    assert git(temp_repo, "branch", "--list", wt.branch) == ""

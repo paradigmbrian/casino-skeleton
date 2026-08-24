@@ -177,6 +177,31 @@ adapter implemented no equivalent. `Supervisor.recover()` now runs at startup an
 timeout sweeps mid-flight, and the same interrupt also left orphaned worktrees and run
 records stuck at `dispatched`, both of which are now cleaned up.
 
+**The budget guard silently stopped counting.** When a worker hits its per-run
+`max_budget_usd`, the SDK raises `ResultError` *instead of* yielding a `ResultMessage` — so
+the generic exception handler recorded a run that had spent its entire cap as costing
+**$0.00**. Since the hourly ceiling is computed by summing those figures, the one rail that
+bounds spend undercounted precisely when spending was highest, and could never trip. Caught
+by watching a live run report `$0.72` while roughly `$1.90` had actually been spent. The
+terminal result payload hangs off `ResultError.data`, so the real cost and turn count are
+now recorded, and the run is classified `budget_exhausted` rather than a generic error.
+
+Two consequences followed from the same bug. A capped task was being *retried*, spending its
+ceiling a second time to reach the identical wall — one task cost twice its cap and produced
+nothing — so runs that end at a limit are now dead-lettered instead. And a capped run was
+discarded wholesale even when the agent had **already finished and committed valid work**:
+one `dep-updater` run correctly removed the unused `requests` pin, then lost the change to a
+cap that tripped afterwards. An agent's own commits now go to the gate however the run ended,
+since the gate — scope check plus full suite — is what decides whether work is good. An
+*uncommitted* worktree is still discarded; a run killed mid-edit may have left half a file.
+
+**The recovery code deleted a directory it did not recognise.** `park_orphans()` scanned the
+filesystem for children of the worktree root and treated each as a checkout — including the
+merge gate's `integration/` directory, which is a *parent* of worktrees rather than one
+itself, and which it then `rmtree`'d. It now asks `git worktree list --porcelain` what the
+worktrees actually are, which also finds a gate worktree orphaned by a crash one level
+deeper than the old scan looked.
+
 **The `-v` flag was in the wrong place.** `agents up -v` — the form the README documents —
 was an argparse error, because a flag declared on the top-level parser only binds *before*
 the subcommand. It now works in either position.
@@ -187,6 +212,12 @@ merge-gate serialization is an `asyncio.Lock` locally, and `desired_count = 1` o
 not an equivalent guarantee during a rolling deploy. The honest production answer is a
 DynamoDB conditional-write lock with a TTL. That is the first thing I would build if this
 went further.
+
+**Per-run budgets were set too tight.** The one review that succeeded used **$0.72 of a
+$0.75 cap** across 18 turns — it barely fit, and two sibling reviewers hit the wall. Caps are
+now $1.50 (reviewer), $1.25 (test-author), $1.00 (investigator), $0.75 (dep-updater). The
+`HOURLY_BUDGET_USD` ceiling stays at $5.00 and, now that accounting is honest, actually
+binds — it is the single knob worth turning before a long run.
 
 **The observed baseline** for the seeded simulator is a **0.4056** player win rate over 5000
 rounds, with zero invariant violations — so the anomaly path depends on real drift rather

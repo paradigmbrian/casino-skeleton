@@ -186,3 +186,105 @@ def test_recover_leaves_finished_runs_alone(tmp_path, temp_repo):
                            started_at=utcnow(), ended_at=utcnow()))
     sup.recover()
     assert [r for r in store.recent() if r.run_id == "done"][0].status == "merged"
+
+
+CAPPED = AgentOutcome("budget_exhausted", summary="ran out of budget",
+                      cost_usd=0.75, num_turns=17, error="run stopped at its budget ceiling")
+
+
+def build_committing(tmp_path, temp_repo, gate, outcome):
+    """A runner that commits its work itself, as a real agent does, before the
+    run ends for whatever reason."""
+    from tests.agents.conftest import git
+
+    store = SqliteStore(tmp_path / "t.db", ledger_path=tmp_path / "runs.jsonl")
+    worktrees = WorktreeManager(temp_repo, tmp_path / "wt", "main")
+
+    async def runner(spec, prompt, worktree_path):
+        (worktree_path / "tests" / "test_agent.py").write_text("def test_x():\n    assert True\n")
+        git(worktree_path, "add", "-A")
+        git(worktree_path, "commit", "-qm", "test: work the agent finished")
+        return outcome
+
+    return store, Supervisor(store=store, orchestrator=Orchestrator(store), gate=gate,
+                             worktrees=worktrees, specs=SPECS, repo_root=temp_repo,
+                             agent_runner=runner)
+
+
+def test_work_committed_before_the_budget_ran_out_still_reaches_the_gate(tmp_path, temp_repo):
+    """The agent finished and committed, then the cap tripped. Throwing that away
+    wastes the money already spent; the gate is what decides whether it is good."""
+    gate = FakeGate(GateResult("merged", ("tests/test_agent.py",), sha="abc"))
+    _, sup = build_committing(tmp_path, temp_repo, gate, CAPPED)
+    rec = asyncio.run(sup.execute(a_task()))
+    assert gate.calls, "committed work was discarded instead of being gated"
+    assert rec.status == "merged"
+    assert rec.cost_usd == pytest.approx(0.75)
+
+
+def test_a_capped_run_that_committed_nothing_never_reaches_the_gate(tmp_path, temp_repo):
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store = SqliteStore(tmp_path / "t.db", ledger_path=tmp_path / "runs.jsonl")
+
+    async def runner(spec, prompt, worktree_path):
+        return CAPPED
+
+    sup = Supervisor(store=store, orchestrator=Orchestrator(store), gate=gate,
+                     worktrees=WorktreeManager(temp_repo, tmp_path / "wt", "main"),
+                     specs=SPECS, repo_root=temp_repo, agent_runner=runner)
+    rec = asyncio.run(sup.execute(a_task()))
+    assert gate.calls == []
+    assert rec.status == "budget_exhausted"
+    assert rec.cost_usd == pytest.approx(0.75)
+
+
+def test_an_uncommitted_worktree_is_not_auto_committed_when_the_run_ended_badly(tmp_path, temp_repo):
+    """ensure_committed sweeps up leftovers for a run that finished cleanly. A run
+    killed mid-edit may have left half a file; that is not work to offer."""
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store = SqliteStore(tmp_path / "t.db", ledger_path=tmp_path / "runs.jsonl")
+
+    async def runner(spec, prompt, worktree_path):
+        (worktree_path / "tests" / "half_written.py").write_text("def test_(\n")
+        return AgentOutcome("timeout", error="exceeded 300s")
+
+    sup = Supervisor(store=store, orchestrator=Orchestrator(store), gate=gate,
+                     worktrees=WorktreeManager(temp_repo, tmp_path / "wt", "main"),
+                     specs=SPECS, repo_root=temp_repo, agent_runner=runner)
+    rec = asyncio.run(sup.execute(a_task()))
+    assert gate.calls == []
+    assert rec.status == "timeout"
+
+
+def test_a_capped_task_is_dead_lettered_rather_than_retried(tmp_path, temp_repo):
+    """Retrying a run that hit its ceiling spends the ceiling again to reach the
+    same wall. Observed live: one task cost twice its cap and produced nothing."""
+    from agents.supervisor import TERMINAL_STATUSES
+
+    assert "budget_exhausted" in TERMINAL_STATUSES
+    assert "max_turns" in TERMINAL_STATUSES
+    assert "scope_rejected" in TERMINAL_STATUSES
+    assert "tests_failed" not in TERMINAL_STATUSES  # that one is worth another look
+
+
+def test_the_worker_loop_dead_letters_a_terminal_status(tmp_path, temp_repo):
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store, sup = build(tmp_path, temp_repo, gate, CAPPED)
+    task = a_task()
+    store.enqueue(task)
+    store.lease()
+
+    asyncio.run(sup.settle(task, "budget_exhausted"))
+    assert store.depth()["dead"] == 1
+    assert store.depth()["queued"] == 0
+
+
+def test_the_worker_loop_requeues_a_retryable_status(tmp_path, temp_repo):
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store, sup = build(tmp_path, temp_repo, gate, OK)
+    task = a_task()
+    store.enqueue(task)
+    store.lease()
+
+    asyncio.run(sup.settle(task, "error"))
+    assert store.depth()["queued"] == 1

@@ -49,10 +49,41 @@ class WorktreeManager:
         run_git(self.repo_root, "worktree", "prune", check=False)
         return wt.branch
 
-    def _commits_ahead(self, branch: str) -> int:
+    def commits_ahead(self, branch: str) -> int:
         proc = run_git(self.repo_root, "rev-list", "--count",
                        f"{self.main_branch}..{branch}", check=False)
         return int(proc.stdout.strip() or 0) if proc.returncode == 0 else 0
+
+    def _registered_worktrees(self) -> list[Worktree]:
+        """Ask git what the worktrees actually are. Scanning the filesystem
+        instead would treat any stray directory under the root as a checkout --
+        including the merge gate's integration directory, which is a parent of
+        worktrees rather than one itself."""
+        out = run_git(self.repo_root, "worktree", "list", "--porcelain", check=False).stdout
+        found: list[Worktree] = []
+        path: Path | None = None
+        branch = ""
+        for line in out.splitlines() + [""]:
+            if line.startswith("worktree "):
+                path = Path(line[len("worktree "):])
+                branch = ""
+            elif line.startswith("branch "):
+                branch = line[len("branch "):].removeprefix("refs/heads/")
+            elif not line.strip() and path is not None:
+                if path != self.repo_root.resolve() and path != self.repo_root:
+                    found.append(Worktree(path=path, branch=branch))
+                path, branch = None, ""
+        return found
+
+    def retire(self, wt: Worktree) -> str | None:
+        """Finish with a worktree whose run did not merge. A branch carrying
+        commits is parked so a human can read what the agent tried; a branch
+        identical to main has nothing on it to read, and keeping one per failed
+        run just accumulates stubs. Returns the branch kept, or None."""
+        if wt.branch and self.commits_ahead(wt.branch) > 0:
+            return self.park(wt)
+        self.cleanup(wt)
+        return None
 
     def park_orphans(self) -> list[str]:
         """Clear every checkout under the worktree root. Only ever called at
@@ -64,19 +95,15 @@ class WorktreeManager:
         is deleted, otherwise every interrupted run leaves a stub behind forever.
         Returns the branches actually kept."""
         parked: list[str] = []
-        if not self.worktree_root.exists():
-            return parked
-        for path in sorted(self.worktree_root.iterdir()):
-            if not path.is_dir():
-                continue
-            proc = run_git(path, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-            branch = proc.stdout.strip() if proc.returncode == 0 else ""
-            wt = Worktree(path=path, branch=branch)
-            if branch and self._commits_ahead(branch) == 0:
-                self.cleanup(wt)
-                continue
-            self.park(wt)
-            parked.append(branch or str(path))
+        root = self.worktree_root.resolve()
+        for wt in self._registered_worktrees():
+            try:
+                wt.path.resolve().relative_to(root)
+            except ValueError:
+                continue  # not ours; leave other people's worktrees alone
+            kept = self.retire(wt)
+            if kept:
+                parked.append(kept)
         return parked
 
     def cleanup(self, wt: Worktree) -> None:

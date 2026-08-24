@@ -85,3 +85,53 @@ def test_write_tools_are_left_out_of_allowed_tools_so_the_guard_is_consulted(tmp
     assert options.allowed_tools == ["Read", "Grep", "Bash"]
     assert options.can_use_tool is not None
     assert options.permission_mode == "default"
+
+
+def make_result_error(subtype, terminal_reason, cost, turns):
+    from claude_agent_sdk._errors import ResultError
+    return ResultError("Claude Code returned an error result",
+                       data={"subtype": subtype, "terminal_reason": terminal_reason,
+                             "total_cost_usd": cost, "num_turns": turns, "is_error": True},
+                       exit_code=1)
+
+
+def test_a_budget_exhausted_run_reports_what_it_actually_spent():
+    """The SDK raises before yielding a ResultMessage, so the naive except-branch
+    records $0.00 for a run that spent its entire cap -- and the hourly ceiling is
+    computed from those numbers, so it undercounts exactly when spend is highest."""
+    from agents.worker import outcome_from_result_error
+
+    out = outcome_from_result_error(
+        make_result_error("error_max_budget_usd", "budget_exhausted", 0.7499, 17), "")
+    assert out.status == "budget_exhausted"
+    assert out.cost_usd == pytest.approx(0.7499)
+    assert out.num_turns == 17
+    assert "budget" in (out.error or "").lower()
+
+
+def test_a_max_turns_run_is_distinguished_from_a_crash():
+    from agents.worker import outcome_from_result_error
+
+    out = outcome_from_result_error(
+        make_result_error("error_max_turns", "max_turns", 0.31, 30), "")
+    assert out.status == "max_turns"
+    assert out.cost_usd == pytest.approx(0.31)
+
+
+def test_any_other_result_error_still_carries_its_cost():
+    from agents.worker import outcome_from_result_error
+
+    out = outcome_from_result_error(
+        make_result_error("error_during_execution", "api_error", 0.12, 3), "partial text")
+    assert out.status == "error"
+    assert out.cost_usd == pytest.approx(0.12)
+    assert out.summary == "partial text"
+
+
+def test_a_result_error_with_no_cost_data_degrades_to_zero():
+    from claude_agent_sdk._errors import ResultError
+    from agents.worker import outcome_from_result_error
+
+    out = outcome_from_result_error(ResultError("boom", data=None, exit_code=1), "")
+    assert out.status == "error"
+    assert out.cost_usd == 0.0

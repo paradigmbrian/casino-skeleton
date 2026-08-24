@@ -21,6 +21,12 @@ from agents.worktree import WorktreeManager
 
 LOG = logging.getLogger("agents.supervisor")
 
+# Statuses where another attempt cannot help. A run that hit its budget or turn
+# ceiling spends the same ceiling reaching the same wall; a scope rejection is a
+# deterministic policy violation, not bad luck. `tests_failed` is deliberately
+# absent -- that one publishes test.failed and is worth a second look.
+TERMINAL_STATUSES = frozenset({"budget_exhausted", "max_turns", "scope_rejected"})
+
 
 class Supervisor:
     def __init__(self, store, orchestrator, gate, worktrees, specs, repo_root: Path,
@@ -86,30 +92,55 @@ class Supervisor:
                      outcome.cost_usd, outcome.num_turns)
             return final
 
-        if outcome.status != "agent_done":
-            self.worktrees.park(wt)
+        # A run can end at a limit *after* the agent finished and committed --
+        # observed live, where a budget cap discarded a complete, correct change.
+        # Its own commits are offered to the gate however the run ended; the gate
+        # checks scope and runs the suite, which is what decides whether work is
+        # good. What is not offered is an uncommitted worktree: a run killed
+        # mid-edit may have left half a file, and that is not work.
+        clean_finish = outcome.status == "agent_done"
+        if not clean_finish and self.worktrees.commits_ahead(wt.branch) == 0:
+            self.worktrees.retire(wt)
             return finish(outcome.status, error=outcome.error)
+        if not clean_finish:
+            LOG.info("[%s] %s ended %s but had committed work; gating it anyway",
+                     run_id, spec.name, outcome.status)
 
         # Cross-worker handoffs are published whether or not the merge succeeds:
         # the investigator's value is the finding, not the file it wrote.
         for event in parse_handoffs(outcome.summary, task.event):
             self.store.publish(event)
 
-        await asyncio.to_thread(ensure_committed, wt.path,
-                                f"{spec.name}: automated change ({task.event.type})")
+        if clean_finish:
+            await asyncio.to_thread(ensure_committed, wt.path,
+                                    f"{spec.name}: automated change ({task.event.type})")
 
         async with self._gate_lock:
             result = await asyncio.to_thread(self.gate.submit, wt.branch, spec.write_scope)
 
         if result.status == "merged":
             self.worktrees.cleanup(wt)
-            return finish("merged", result.changed_files)
+            return finish("merged", result.changed_files,
+                          error=None if clean_finish else outcome.error)
 
-        self.worktrees.park(wt)
+        self.worktrees.retire(wt)
         if result.status == "tests_failed":
             self.store.publish(task.event.child(
                 "test.failed", {"branch": wt.branch, "detail": result.detail}))
         return finish(result.status, result.changed_files, error=result.detail)
+
+    async def settle(self, task: Task, status: str) -> None:
+        """Decide the task's fate from how its run ended."""
+        if status == "merged":
+            self.store.ack(task.id)
+            return
+        if status in TERMINAL_STATUSES:
+            LOG.warning("task %s ended %s; dead-lettering rather than retrying",
+                        task.id, status)
+            self.store.nack(task.id, max_attempts=0)  # 0 => terminal on this attempt
+            return
+        LOG.warning("task %s ended %s; requeuing", task.id, status)
+        self.store.nack(task.id, config.MAX_TASK_ATTEMPTS)
 
     # ------------------------------------------------------------------ loops
 
@@ -155,11 +186,7 @@ class Supervisor:
                 continue
             try:
                 record = await self.execute(task)
-                if record.status == "merged":
-                    self.store.ack(task.id)
-                else:
-                    LOG.warning("task %s ended %s; nacking", task.id, record.status)
-                    self.store.nack(task.id, config.MAX_TASK_ATTEMPTS)
+                await self.settle(task, record.status)
             except Exception:
                 LOG.exception("worker slot %d crashed on task %s", slot, task.id)
                 self.store.nack(task.id, config.MAX_TASK_ATTEMPTS)
