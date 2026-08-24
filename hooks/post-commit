@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Publishes commit.pushed the instant a commit lands, so the reviewer wakes in
+# under a second. The GitSensor poller reconciles anything this misses (for
+# example commits made while the layer was down); duplicate delivery is harmless
+# because the dedupe key is the SHA.
+set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/.venv/bin/python" - <<'PY'
+import subprocess
+from agents.adapters.sqlite_store import SqliteStore
+from agents.config import DB_PATH, LEDGER_PATH
+from agents.types import Event
+
+sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+subject = subprocess.run(["git", "log", "-1", "--pretty=%s"], capture_output=True, text=True).stdout.strip()
+if not subject.startswith("review:"):
+    SqliteStore(DB_PATH, ledger_path=LEDGER_PATH).publish(
+        Event(type="commit.pushed",
+              payload={"sha": sha, "short_sha": sha[:8], "subject": subject},
+              source="post_commit_hook")
+    )
+PY
