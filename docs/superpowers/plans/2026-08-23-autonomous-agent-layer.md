@@ -53,7 +53,7 @@
 - Consumes: nothing
 - Produces: `Event(type, payload, depth, id, created_at, source)` with `.dedupe_key() -> str` and `.child(type, payload) -> Event`; `Task(id, worker, event, dedupe_key, attempts)`; `RunRecord`; `config.ROUTES: dict[str, str]`; `config.MAX_CASCADE_DEPTH: int`; `config.REPO_ROOT: Path`; `config.STATE_DIR: Path`; `config.DB_PATH: Path`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_types.py
@@ -98,12 +98,12 @@ def test_run_record_defaults_to_zero_cost():
     assert rec.ended_at is None
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_types.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents'`
 
-- [ ] **Step 3: Create the package and types**
+- [x] **Step 3: Create the package and types**
 
 ```python
 # agents/__init__.py
@@ -179,7 +179,7 @@ class RunRecord:
     error: str | None = None
 ```
 
-- [ ] **Step 4: Write the config module**
+- [x] **Step 4: Write the config module**
 
 ```python
 # agents/config.py
@@ -233,17 +233,17 @@ claude-agent-sdk==0.2.144
 coverage==7.6.10
 ```
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_types.py -q`
 Expected: PASS, 5 passed
 
-- [ ] **Step 6: Install the agent-layer dependencies**
+- [x] **Step 6: Install the agent-layer dependencies**
 
 Run: `uv pip install --python .venv/bin/python -r agents/requirements.txt`
 Expected: `claude-agent-sdk` and `coverage` resolve. Verify: `.venv/bin/python -c "import claude_agent_sdk, coverage; print('ok')"`
 
-- [ ] **Step 7: Ignore agent state, then commit**
+- [x] **Step 7: Ignore agent state, then commit**
 
 Append to `.gitignore`:
 
@@ -270,7 +270,7 @@ git commit -m "feat(agents): domain types, routing table, and configuration"
 - Consumes: `agents.types.Event`, `agents.config.DB_PATH`
 - Produces: `EventBus` ABC with `publish(event) -> None` and `drain(limit: int = 50) -> list[Event]`; `SqliteStore(db_path)` implementing it, plus `SqliteStore.connect()` creating the schema idempotently
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_event_bus.py
@@ -320,12 +320,12 @@ def test_publishing_the_same_event_id_twice_is_idempotent(store):
     assert len(store.drain()) == 1
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_event_bus.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.adapters'`
 
-- [ ] **Step 3: Write the port ABCs**
+- [x] **Step 3: Write the port ABCs**
 
 ```python
 # agents/ports.py
@@ -386,7 +386,7 @@ class RunStore(ABC):
     def set_meta(self, key: str, value: str) -> None: ...
 ```
 
-- [ ] **Step 4: Implement the schema and the EventBus half**
+- [x] **Step 4: Implement the schema and the EventBus half**
 
 ```python
 # agents/adapters/__init__.py
@@ -505,12 +505,12 @@ class SqliteStore(EventBus, WorkQueue, RunStore):
         ]
 ```
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_event_bus.py -q`
 Expected: PASS, 5 passed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add agents/ports.py agents/adapters/ tests/agents/test_event_bus.py
@@ -528,7 +528,7 @@ git commit -m "feat(agents): port interfaces and SQLite-backed event bus"
 - Consumes: `agents.types.Task`, `agents.types.Event`
 - Produces: `SqliteStore.enqueue(task) -> bool`, `.lease() -> Task | None`, `.ack(task_id) -> None`, `.nack(task_id, max_attempts) -> str`, `.depth() -> dict[str, int]`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_work_queue.py
@@ -601,12 +601,12 @@ def test_lease_is_fifo_across_distinct_work(store):
     assert store.lease().event.payload["module"] == "casino/b.py"
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_work_queue.py -q`
 Expected: FAIL — `AttributeError: 'SqliteStore' object has no attribute 'enqueue'`
 
-- [ ] **Step 3: Append the WorkQueue methods to `SqliteStore`**
+- [x] **Step 3: Append the WorkQueue methods to `SqliteStore`**
 
 ```python
     # ---------------- WorkQueue ----------------
@@ -681,12 +681,12 @@ Expected: FAIL — `AttributeError: 'SqliteStore' object has no attribute 'enque
         return counts
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_work_queue.py -q`
 Expected: PASS, 7 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/adapters/sqlite_store.py tests/agents/test_work_queue.py
@@ -705,7 +705,7 @@ git commit -m "feat(agents): work queue with lease, dedupe index, and dead-lette
 - Consumes: `agents.types.RunRecord`
 - Produces: `SqliteStore(db_path, ledger_path=None)`; `.record(run)`, `.recent(limit)`, `.cost_since(iso)`, `.get_meta(key)`, `.set_meta(key, value)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_run_store.py
@@ -779,12 +779,12 @@ def test_meta_round_trips_and_defaults_to_none(store):
     assert store.get_meta("baseline") == "0.4213"
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_run_store.py -q`
 Expected: FAIL — `TypeError: SqliteStore.__init__() got an unexpected keyword argument 'ledger_path'`
 
-- [ ] **Step 3: Widen the constructor**
+- [x] **Step 3: Widen the constructor**
 
 Replace the existing `__init__` with:
 
@@ -799,7 +799,7 @@ Replace the existing `__init__` with:
             c.executescript(SCHEMA)
 ```
 
-- [ ] **Step 4: Append the RunStore methods**
+- [x] **Step 4: Append the RunStore methods**
 
 ```python
     # ---------------- RunStore ----------------
@@ -865,12 +865,12 @@ Replace the existing `__init__` with:
             )
 ```
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/ -q`
 Expected: PASS, all tests from Tasks 1-4
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add agents/adapters/sqlite_store.py tests/agents/test_run_store.py
@@ -889,7 +889,7 @@ git commit -m "feat(agents): run ledger with JSONL mirror and cost accounting"
 - Consumes: `agents.config`
 - Produces: `scope.in_scope(path: str, scope: tuple[str, ...]) -> bool`; `scope.out_of_scope(paths, scope) -> list[str]`; `worktree.Worktree(path: Path, branch: str)`; `worktree.WorktreeManager(repo_root, worktree_root, main_branch)` with `.create(name_hint) -> Worktree`, `.park(wt) -> str`, `.cleanup(wt) -> None`
 
-- [ ] **Step 1: Write the failing scope test**
+- [x] **Step 1: Write the failing scope test**
 
 ```python
 # tests/agents/test_scope.py
@@ -928,12 +928,12 @@ def test_out_of_scope_returns_only_the_offenders():
     assert out_of_scope(changed, TESTS_ONLY) == ["casino/table.py", "README.md"]
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_scope.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.scope'`
 
-- [ ] **Step 3: Implement the predicate**
+- [x] **Step 3: Implement the predicate**
 
 Glob syntax is deliberately avoided. `fnmatch` treats `*` as matching `/`, and `PurePath.full_match` only exists on 3.13+, so `tests/**` would be quietly wrong in two different directions. A scope entry is either an exact repo-relative path or a directory prefix ending in `/`.
 
@@ -976,7 +976,7 @@ def out_of_scope(paths, scope: tuple[str, ...]) -> list[str]:
     return [p for p in paths if not in_scope(p, scope)]
 ```
 
-- [ ] **Step 4: Write the failing worktree test**
+- [x] **Step 4: Write the failing worktree test**
 
 ```python
 # tests/agents/conftest.py
@@ -1059,12 +1059,12 @@ def test_cleanup_is_safe_to_call_twice(temp_repo, tmp_path):
     mgr.cleanup(wt)  # must not raise
 ```
 
-- [ ] **Step 5: Run it and confirm it fails**
+- [x] **Step 5: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_worktree.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.worktree'`
 
-- [ ] **Step 6: Implement the worktree manager**
+- [x] **Step 6: Implement the worktree manager**
 
 ```python
 # agents/worktree.py
@@ -1124,12 +1124,12 @@ class WorktreeManager:
         run_git(self.repo_root, "branch", "-D", wt.branch, check=False)
 ```
 
-- [ ] **Step 7: Run both test files and confirm they pass**
+- [x] **Step 7: Run both test files and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_scope.py tests/agents/test_worktree.py -q`
 Expected: PASS, 11 passed
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add agents/scope.py agents/worktree.py tests/agents/test_scope.py tests/agents/test_worktree.py tests/agents/conftest.py
@@ -1149,7 +1149,7 @@ git commit -m "feat(agents): write-scope predicate and git worktree lifecycle"
 
 The gate is the only code that writes to `main`, and it is called from a single serialized point in the supervisor. Its order matters: scope is checked *before* tests, because an out-of-scope diff is a policy violation regardless of whether it happens to pass.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_merge_gate.py
@@ -1230,12 +1230,12 @@ def test_the_integration_worktree_is_always_cleaned_up(temp_repo, gate, tmp_path
     assert leftovers == []
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_merge_gate.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.merge_gate'`
 
-- [ ] **Step 3: Implement the gate**
+- [x] **Step 3: Implement the gate**
 
 ```python
 # agents/merge_gate.py
@@ -1318,12 +1318,12 @@ class MergeGate:
         return GateResult("merged", changed, sha=sha, detail=f"merged {branch}")
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_merge_gate.py -q`
 Expected: PASS, 6 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/merge_gate.py tests/agents/test_merge_gate.py
@@ -1352,7 +1352,7 @@ git commit -m "feat(agents): merge gate enforcing write scope then tests before 
 - `AssistantMessage.content` is a list of blocks; text blocks are `TextBlock` with `.text`.
 - `setting_sources=None` (the default) means the repo's `CLAUDE.md` and user settings are **not** loaded. Keep it that way.
 
-- [ ] **Step 1: Write the failing test — the guard, with no API calls**
+- [x] **Step 1: Write the failing test — the guard, with no API calls**
 
 ```python
 # tests/agents/test_worker.py
@@ -1428,12 +1428,12 @@ def test_worker_spec_defaults_are_conservative():
     assert spec.max_cost_usd == 0.50
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_worker.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.worker'`
 
-- [ ] **Step 3: Implement the runtime**
+- [x] **Step 3: Implement the runtime**
 
 ```python
 # agents/worker.py
@@ -1585,12 +1585,12 @@ async def run_agent(spec: WorkerSpec, prompt: str, worktree_path: Path,
     )
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_worker.py -q`
 Expected: PASS, 9 passed
 
-- [ ] **Step 5: Verify the guard actually fires against the live SDK**
+- [x] **Step 5: Verify the guard actually fires against the live SDK**
 
 This is the one assumption unit tests cannot settle: whether the chosen `permission_mode` routes tool calls through `can_use_tool`. Verify it once, by hand, before building anything on top.
 
@@ -1627,7 +1627,7 @@ Expected: `BLOCKED FILE EXISTS: False`, and the summary mentions being denied.
 
 Delete `scratch_guard_check.py` when done.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add agents/worker.py tests/agents/test_worker.py
@@ -1649,7 +1649,7 @@ Prompts are the product here. Each one names the write scope explicitly, because
 that understands *why* it is blocked writes a useful final message instead of thrashing
 against the guard.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_specs.py
@@ -1720,12 +1720,12 @@ def test_task_brief_is_non_empty_for_every_routed_event(event_type):
     assert brief.strip()
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_specs.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.specs'`
 
-- [ ] **Step 3: Write the specs**
+- [x] **Step 3: Write the specs**
 
 ```python
 # agents/specs/__init__.py
@@ -1903,12 +1903,12 @@ def task_brief(event: Event) -> str:
             return f"Event {event.type} with payload {p}. Use your judgement."
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_specs.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/specs/ tests/agents/test_specs.py
@@ -1927,7 +1927,7 @@ git commit -m "feat(agents): worker specs with disjoint write scopes and task br
 - Consumes: `SqliteStore`, `config.ROUTES`, `config.MAX_CASCADE_DEPTH`, `config.HOURLY_BUDGET_USD`
 - Produces: `Orchestrator(store, routes=ROUTES, max_depth=..., hourly_budget_usd=...)` with `.dispatch_pending() -> list[Task]` and `.budget_remaining() -> float`; module function `parse_handoffs(summary: str, parent: Event) -> list[Event]`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_orchestrator.py
@@ -2014,12 +2014,12 @@ def test_parse_handoffs_ignores_none_and_missing_lines():
     assert parse_handoffs("no handoff lines at all", parent) == []
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_orchestrator.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.orchestrator'`
 
-- [ ] **Step 3: Implement the orchestrator**
+- [x] **Step 3: Implement the orchestrator**
 
 ```python
 # agents/orchestrator.py
@@ -2107,12 +2107,12 @@ class Orchestrator:
         return dispatched
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_orchestrator.py -q`
 Expected: PASS, 8 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/orchestrator.py tests/agents/test_orchestrator.py
@@ -2134,7 +2134,7 @@ git commit -m "feat(agents): deterministic orchestrator with cascade cap and bud
 never reviews its own commits" is implemented — a greppable convention rather than author
 metadata, so it survives the commits being made by different git identities.
 
-- [ ] **Step 1: Write the failing git-sensor test**
+- [x] **Step 1: Write the failing git-sensor test**
 
 ```python
 # tests/agents/test_sensors_git.py
@@ -2190,12 +2190,12 @@ def test_the_reviewers_own_commits_are_skipped(temp_repo, sensor):
     assert [e.payload["subject"] for e in sensor.poll()] == ["test: add coverage"]
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_git.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.sensors'`
 
-- [ ] **Step 3: Implement the git sensor**
+- [x] **Step 3: Implement the git sensor**
 
 ```python
 # agents/sensors/__init__.py
@@ -2255,7 +2255,7 @@ class GitSensor:
         return events
 ```
 
-- [ ] **Step 4: Write the failing coverage-sensor test**
+- [x] **Step 4: Write the failing coverage-sensor test**
 
 ```python
 # tests/agents/test_sensors_coverage.py
@@ -2310,7 +2310,7 @@ def test_a_runner_that_fails_yields_no_events_rather_than_raising(tmp_path):
     assert sensor.poll() == []
 ```
 
-- [ ] **Step 5: Implement the coverage sensor**
+- [x] **Step 5: Implement the coverage sensor**
 
 ```python
 # agents/sensors/coverage.py
@@ -2374,12 +2374,12 @@ class CoverageSensor:
         return events
 ```
 
-- [ ] **Step 6: Run both sensor test files and confirm they pass**
+- [x] **Step 6: Run both sensor test files and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_git.py tests/agents/test_sensors_coverage.py -q`
 Expected: PASS, 9 passed
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add agents/sensors/ tests/agents/test_sensors_git.py tests/agents/test_sensors_coverage.py
@@ -2401,7 +2401,7 @@ git commit -m "feat(agents): git and coverage sensors"
 The network call lives here, not in the agent, so the trigger fires deterministically even
 if a model call flakes. `fetcher` is injected so tests never touch the network.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_sensors_timer.py
@@ -2466,12 +2466,12 @@ def test_a_missing_requirements_file_yields_nothing(tmp_path):
     assert sensor.poll() == []
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_timer.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.sensors.timer'`
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 ```python
 # agents/sensors/timer.py
@@ -2542,17 +2542,17 @@ class TimerSensor:
         return events
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_timer.py -q`
 Expected: PASS, 8 passed
 
-- [ ] **Step 5: Sanity-check the live lookup once**
+- [x] **Step 5: Sanity-check the live lookup once**
 
 Run: `.venv/bin/python -c "from agents.sensors.timer import fetch_latest; print('requests latest:', fetch_latest('requests'))"`
 Expected: a version far newer than `2.6.0`. If this fails, the network is unavailable — note it and continue; the sensor degrades to emitting nothing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add agents/sensors/timer.py tests/agents/test_sensors_timer.py
@@ -2571,7 +2571,7 @@ git commit -m "feat(agents): timer sensor with deterministic PyPI version lookup
 - Consumes: `SqliteStore` meta storage, `outcomes.jsonl`
 - Produces: `two_proportion_z(x1, n1, x2, n2) -> float`; `invariant_violations(rows) -> list[tuple[str, dict]]`; `read_tail(path, limit) -> list[dict]`; `AnomalySensor(outcomes_path, store, z_threshold=3.0, batch=200).poll() -> list[Event]`; `sim_runner.run_simulation(repo_root, rounds, python=sys.executable) -> None`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_sensors_anomaly.py
@@ -2696,12 +2696,12 @@ def test_a_missing_outcomes_file_yields_nothing(tmp_path):
     assert sensor.poll() == []
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_anomaly.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.sensors.anomaly'`
 
-- [ ] **Step 3: Implement the anomaly sensor**
+- [x] **Step 3: Implement the anomaly sensor**
 
 ```python
 # agents/sensors/anomaly.py
@@ -2818,7 +2818,7 @@ class AnomalySensor:
         return events
 ```
 
-- [ ] **Step 4: Implement the simulation runner**
+- [x] **Step 4: Implement the simulation runner**
 
 ```python
 # agents/sensors/sim_runner.py
@@ -2845,12 +2845,12 @@ def run_simulation(repo_root: Path, rounds: int, python: str = sys.executable) -
     return True
 ```
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_sensors_anomaly.py -q`
 Expected: PASS, 15 passed
 
-- [ ] **Step 6: Establish the real baseline against the actual simulator**
+- [x] **Step 6: Establish the real baseline against the actual simulator**
 
 Run:
 ```bash
@@ -2868,7 +2868,7 @@ Expected: a plausible rate (roughly 0.38–0.45 for hit-to-17 versus hit-to-17).
 observed figure in the README. **If invariant violations appear here, that is a genuine
 find — note it; the investigator will have real work on its first tick.**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add agents/sensors/anomaly.py agents/sensors/sim_runner.py tests/agents/test_sensors_anomaly.py
@@ -2890,7 +2890,7 @@ git commit -m "feat(agents): anomaly sensor with winner-conditional invariants a
 The gate is behind an `asyncio.Lock`, which is what "single writer, strictly serialized" means
 in practice.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_supervisor.py
@@ -3009,12 +3009,12 @@ def test_request_stop_sets_the_flag_the_loop_checks(tmp_path, temp_repo):
     assert sup.stopping is True
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_supervisor.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.supervisor'`
 
-- [ ] **Step 3: Implement the supervisor**
+- [x] **Step 3: Implement the supervisor**
 
 ```python
 # agents/supervisor.py
@@ -3207,12 +3207,12 @@ def build_default_supervisor() -> Supervisor:
     )
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_supervisor.py -q`
 Expected: PASS, 8 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/supervisor.py tests/agents/test_supervisor.py
@@ -3231,7 +3231,7 @@ git commit -m "feat(agents): supervisor with serialized merge gate and bounded w
 - Consumes: `Supervisor`, `SqliteStore`, `config`
 - Produces: `main(argv: list[str] | None = None) -> int`; `format_status(store) -> str`; `format_events(store, limit) -> str`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/agents/test_cli.py
@@ -3261,12 +3261,12 @@ def test_status_is_readable_when_nothing_has_happened(tmp_path):
     assert "no runs yet" in out.lower()
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_cli.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agents.cli'`
 
-- [ ] **Step 3: Implement the CLI**
+- [x] **Step 3: Implement the CLI**
 
 ```python
 # agents/cli.py
@@ -3392,7 +3392,7 @@ from agents.cli import main
 raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run the tests and check the CLI by hand**
+- [x] **Step 4: Run the tests and check the CLI by hand**
 
 Run: `.venv/bin/python -m pytest tests/agents/test_cli.py -q`
 Expected: PASS, 2 passed
@@ -3400,7 +3400,7 @@ Expected: PASS, 2 passed
 Run: `.venv/bin/python -m agents.cli status`
 Expected: an empty-but-readable status table, exit 0
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add agents/cli.py agents/__main__.py tests/agents/test_cli.py
@@ -3419,7 +3419,7 @@ git commit -m "feat(agents): CLI with up, status, events, and stop"
 - Consumes: everything
 - Produces: a running system
 
-- [ ] **Step 1: Write the post-commit hook**
+- [x] **Step 1: Write the post-commit hook**
 
 ```bash
 # hooks/post-commit
@@ -3447,7 +3447,7 @@ if not subject.startswith("review:"):
 PY
 ```
 
-- [ ] **Step 2: Install it and verify it fires**
+- [x] **Step 2: Install it and verify it fires**
 
 ```bash
 chmod +x hooks/post-commit
@@ -3460,7 +3460,7 @@ Expected: a `commit.pushed` event with `source=post_commit_hook`.
 **Note:** `.git/hooks/` is not tracked by git, so the symlink is a setup step, not a commit.
 The README must say so.
 
-- [ ] **Step 3: Write `docs/aws-mapping.md`**
+- [x] **Step 3: Write `docs/aws-mapping.md`**
 
 Content must cover, at minimum: the component-by-component table from spec section 8; why
 workers are Fargate rather than Lambda (git, writable filesystem, multi-minute runs versus
@@ -3469,7 +3469,7 @@ Lambda's 15-minute ceiling and ephemeral `/tmp`); and the merge-gate serializati
 production answer is a conditional-write lock in DynamoDB with a TTL. State plainly that
 nothing here was deployed.
 
-- [ ] **Step 4: Rewrite `README.md`**
+- [x] **Step 4: Rewrite `README.md`**
 
 Required sections, per requirement R5:
 
@@ -3491,19 +3491,23 @@ Required sections, per requirement R5:
    `--inject-anomaly` exists as a labelled fallback; and whatever the Task 7 Step 5 guard
    verification turned up.
 
-- [ ] **Step 5: Run the whole suite and confirm it is green**
+- [x] **Step 5: Run the whole suite and confirm it is green**
 
 Run: `.venv/bin/python -m pytest tests/ -q`
 Expected: every test passes — the original 3 casino tests plus the agent-layer tests.
 
-- [ ] **Step 6: Commit the docs and hook**
+- [x] **Step 6: Commit the docs and hook**
 
 ```bash
 git add hooks/ docs/aws-mapping.md README.md
 git commit -m "docs: README, AWS mapping, and post-commit hook"
 ```
 
-- [ ] **Step 7: End-to-end unattended run**
+- [ ] **Step 7: End-to-end unattended run** — *run once on 2026-08-23 and stopped
+  early. One reviewer run merged (`docs/reviews/dd43412.md`, $0.72, 18 turns) and the
+  cascade was observed, but the run exposed a budget-accounting defect (see Execution
+  log) and was stopped rather than left spending against a ceiling that could not trip.
+  Re-run after the fixes to complete this step.*
 
 ```bash
 export ANTHROPIC_API_KEY=...   # or rely on an `ant auth login` profile
@@ -3525,7 +3529,7 @@ git log --oneline | head -20        # agent commits above the template's Initial
 cat agents/state/runs.jsonl | tail -5
 ```
 
-- [ ] **Step 8: Decide on pushing**
+- [ ] **Step 8: Decide on pushing** — *not done; `PUSH_ENABLED` is still `False`.*
 
 If the agents' commits should appear on GitHub for the submission, set `PUSH_ENABLED = True`
 in `agents/config.py` or push by hand:
@@ -3579,3 +3583,49 @@ object throughout, which the `Orchestrator` and `Supervisor` constructors both r
 **Ordering note for the executor:** Tasks 1–14 are strictly sequential — each depends on the one
 before. Task 7 Step 5 is the only step requiring a live API key; if none is available, mark it
 blocked and continue, but do not claim the guard works.
+
+
+---
+
+## Execution log
+
+Written after implementing the plan, recording where reality diverged from it. Every item
+below is a defect **in the plan as written**, found while executing it; each is fixed in the
+code and described in the README's "what did not go as planned" section.
+
+### Found by unit tests, during implementation
+
+| # | Task | Defect | Fix |
+|---|---|---|---|
+| 1 | 2 | `SqliteStore` was declared as `SqliteStore(EventBus, WorkQueue, RunStore)` in Task 2 but only implements `EventBus` until Task 4, so it could not be instantiated and Task 2's own tests could not pass. | Base classes widen task by task (`EventBus` → `+WorkQueue` → `+RunStore`). End state identical to the plan. |
+| 2 | 9 | `dispatch_pending` drained the bus *before* checking the budget, so events held at the ceiling were consumed and destroyed — and the method's own `budget.exhausted` notice was swallowed on the next tick, which is what made the plan's own test fail. | Budget is checked before the drain; over-budget events stay on the bus. |
+
+### Found by verification against the live SDK
+
+| # | Task | Defect | Fix |
+|---|---|---|---|
+| 3 | 7 | **The write-scope guard did not work.** `can_use_tool` was wired as the enforcer while `Write`/`Edit` were also listed in `allowed_tools`. An `allowed_tools` entry that permits a whole tool auto-approves it *before* the callback is consulted, so the agent wrote straight through the guard — the SDK emits `CanUseToolShadowedWarning` saying exactly this. Task 7 Step 5 exists precisely to catch this, and did. | `build_options` excludes write tools from `allowed_tools`; both allow and deny paths re-verified live; regression test added. |
+
+### Found by running it
+
+| # | Defect | Fix |
+|---|---|---|
+| 4 | `agents up -v` — the form this plan and the README both document — was an argparse error. A flag declared on the top-level parser binds only *before* the subcommand. | `-v` declared on both, subcommand copy using `SUPPRESS` so it cannot clobber a leading `-v`. |
+| 5 | **Nothing reclaimed an abandoned lease.** A supervisor killed mid-run left tasks in `leased` with no holder; `lease()` only picks `queued` rows. Because the dedupe index spans queued *and* leased rows, that unit of work then became permanently unqueueable — a silent deadlock. The plan's AWS mapping waved at this ("SQS visibility timeout") without noticing the local adapter implemented no equivalent. | `reclaim_expired_leases`, plus `Supervisor.recover()` at startup for orphaned worktrees and dangling run records. |
+| 6 | **The budget guard stopped counting.** A per-run cap raises `ResultError` *instead of* yielding a `ResultMessage`, so the generic handler recorded `$0.00` for a run that spent its entire cap. The hourly ceiling sums those figures, so it undercounted exactly when spend was highest and could never trip. | Cost and turns read from `ResultError.data`; status `budget_exhausted`. |
+| 7 | Capped runs were **retried** into the identical wall, spending the cap twice for nothing. | Terminal statuses (`budget_exhausted`, `max_turns`, `scope_rejected`) are dead-lettered, not requeued. |
+| 8 | A capped run **discarded work the agent had already committed** — one `dep-updater` run correctly removed the unused `requests` pin and lost it to a cap that tripped afterwards. | An agent's own commits reach the gate however the run ended. An *uncommitted* worktree is still discarded. |
+| 9 | `park_orphans()` scanned the filesystem and `rmtree`'d every child of the worktree root, including the merge gate's `integration/` directory — a *parent* of worktrees, not one itself. | Enumerates `git worktree list --porcelain`; also finds gate worktrees one level deeper than the old scan looked. |
+| 10 | Per-run budgets were too tight: the one successful review used **$0.72 of a $0.75 cap** in 18 turns. Two sibling reviewers hit the wall. | Caps raised to $1.50 / $1.25 / $1.00 / $0.75. `HOURLY_BUDGET_USD` unchanged at $5.00, and now that accounting is honest it actually binds. |
+
+### Observations that were not defects
+
+- `CanUseToolShadowedWarning` for `Read`, `Grep`, `Glob`, `Bash` is expected and correct —
+  those are read-only and deliberately pre-approved. Note that `Bash` *can* write via a shell
+  redirect and the callback cannot see it; that is exactly why the merge gate re-checks scope
+  against the branch's actual diff.
+- The empirical simulator baseline is a **0.4056** player win rate over 5000 rounds with zero
+  invariant violations, so the anomaly path depends on genuine drift rather than a seeded bug.
+- Agent output quality was good where it was observed: the reviewer correctly identified an
+  *empty* commit rather than manufacturing findings, and `dep-updater` grepped before acting
+  and removed `requests` as unused rather than blindly bumping the pin.

@@ -21,7 +21,7 @@ writing three new adapters, not touching the control plane.
 | `anomaly_sensor` | CloudWatch custom metric + alarm → EventBridge | The simulator emits `PlayerWinRate` as a metric; an anomaly-detection alarm replaces the hand-rolled z-test. Invariant checks stay as code because they are assertions, not statistics. |
 | `sim_runner` | ECS Scheduled Task | Same container image as the workers, different entrypoint. |
 | `EventBus` (`events` table) | EventBridge custom bus | `config.ROUTES` becomes a set of EventBridge rules — one rule per event type, target = the worker's queue. The routing table stops being application code and becomes infrastructure. |
-| `WorkQueue` (`tasks` table + partial unique index) | SQS + DLQ | `lease` → `ReceiveMessage` with a visibility timeout; `ack` → `DeleteMessage`; `nack` → let visibility expire. The redrive policy replaces `MAX_TASK_ATTEMPTS`. Dedupe uses a FIFO queue with `MessageDeduplicationId` = the dedupe key. |
+| `WorkQueue` (`tasks` table + partial unique index) | SQS + DLQ | `lease` → `ReceiveMessage` with a visibility timeout; `ack` → `DeleteMessage`; `nack` → let visibility expire. The redrive policy replaces `MAX_TASK_ATTEMPTS`. **The local adapter had to grow its own visibility timeout** (`reclaim_expired_leases`) — see below. Dedupe uses a FIFO queue with `MessageDeduplicationId` = the dedupe key. |
 | orchestrator + merge gate | ECS Fargate service | Long-lived, needs a git checkout, holds the lock described below. |
 | workers | ECS Fargate `RunTask` per lease | One task per run, torn down after. |
 | git worktree isolation | The task's own ephemeral volume | A fresh `git clone --depth` per task is simpler in the cloud than worktrees and gives the same isolation. |
@@ -45,6 +45,20 @@ Three properties of a worker run rule Lambda out:
 
 The orchestrator and merge gate are a *service* rather than per-invocation tasks for a
 different reason: they hold state (the lock, the leased-task view) and they must be singular.
+
+## Where relying on the mapping bit
+
+An earlier draft of this document listed the SQS visibility timeout as the production
+equivalent of the local lease, which is accurate — and hid the fact that the local adapter
+implemented no equivalent at all. `lease()` selects only `queued` rows, so a task leased by a
+supervisor that then died stayed leased forever; and because the dedupe index spans both
+`queued` and `leased`, that unit of work could never be enqueued again. A silent deadlock,
+found by killing a live run with Ctrl-C.
+
+The lesson is narrow but worth stating: a mapping table describes what a managed service
+*would* do for you, and it is easy to read that as a description of what the local code
+*does*. `reclaim_expired_leases` plus `Supervisor.recover()` now provide the property
+locally, and the AWS row is genuinely a swap rather than an upgrade.
 
 ## The one thing that does not map cleanly
 

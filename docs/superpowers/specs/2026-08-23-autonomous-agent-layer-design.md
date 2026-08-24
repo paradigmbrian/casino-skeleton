@@ -230,13 +230,16 @@ of the system.
 | Rail | Mechanism |
 |---|---|
 | Cascade cap | Every event carries `depth`; the orchestrator drops anything past 3. Reviewer never reviews its own commits, but does review other agents' — that is the cascade worth showing. |
-| Budget guard | Per-run `max_cost_usd` plus a global per-hour ceiling. Exceeded means dispatch is refused and `budget.exhausted` is emitted; the layer keeps running rather than silently burning money. |
-| Timeouts and DLQ | Wall-clock kill per run, branch parked, task retried N times then dead-lettered with the failure recorded. |
-| Idempotency | Dedupe key per task; the same coverage gap cannot be queued twice while one is in flight. |
-| Kill switch | `python -m agents.cli stop` sets a flag checked between dispatches; SIGTERM drains in-flight work rather than orphaning worktrees. |
-| Scope enforcement | Diff checked against `write_scope` at the gate, before tests. |
+| Budget guard **†** | Per-run `max_cost_usd` plus a global per-hour ceiling. Exceeded means dispatch is refused and `budget.exhausted` is emitted; the layer keeps running rather than silently burning money. |
+| Timeouts and DLQ **†** | Wall-clock kill per run, branch parked, task retried N times then dead-lettered with the failure recorded. |
+| Idempotency **†** | Dedupe key per task; the same coverage gap cannot be queued twice while one is in flight. |
+| Kill switch **†** | `python -m agents.cli stop` sets a flag checked between dispatches; SIGTERM drains in-flight work rather than orphaning worktrees. |
+| Scope enforcement **†** | Diff checked against `write_scope` at the gate, before tests. |
 | Push is opt-in | `PUSH_ENABLED` flag. The gate always merges locally; pushing to `origin` is the one action that leaves the machine. |
 | Secret hygiene | `ANTHROPIC_API_KEY` from the environment, never logged; the ledger redacts. |
+
+**†** These rails did not hold as designed. See *Post-implementation corrections* at the end
+of this document.
 
 ---
 
@@ -352,3 +355,60 @@ on `main`; the run ledger; the README. That set satisfies every stated requireme
 - [ ] Cascade is visible: one agent's commit triggers another agent's work
 - [ ] README covers run instructions, each agent and trigger, AI tools used, and what did not go
       as planned
+
+
+---
+
+## Post-implementation corrections
+
+This section is appended after building and running the layer. The design above is left as
+written — it is the record of what was intended — and this records where that intent was
+wrong. Full detail, including the fixes, is in the implementation plan's *Execution log* and
+the README's *what did not go as planned*.
+
+**Budget guard (§6).** The design treated per-run `max_cost_usd` and the hourly ceiling as
+independent rails. They are not: hitting the per-run cap makes the SDK raise instead of
+returning a result, so the run's cost was recorded as `$0.00` and the hourly ceiling — which
+is computed by summing recorded costs — undercounted by exactly the amount most worth
+counting. A rail that is derived from another rail's output fails whenever that output has a
+failure mode, and this one failed silently and in the unsafe direction. Cost is now read from
+the terminal error payload.
+
+**Timeouts and DLQ (§6).** "Task retried N times then dead-lettered" is wrong for a run that
+ended at a *limit*. A retry re-spends the same budget to reach the same wall; the design
+implicitly assumed every failure is transient. Failures now split into terminal
+(`budget_exhausted`, `max_turns`, `scope_rejected` — dead-lettered immediately) and
+retryable.
+
+Relatedly, "branch parked" discarded work in the case where the agent had finished and
+committed *before* the limit tripped. Parking was modelled as the failure path, but a run
+that hit a ceiling is not necessarily a run that produced nothing. An agent's own commits now
+go to the gate regardless of how the run ended — the gate, not the run's exit status, is what
+decides whether work is good.
+
+**Idempotency (§6).** The dedupe rail — a partial unique index over `('queued', 'leased')` —
+is correct while a supervisor is alive and became a deadlock when one died. A task left in
+`leased` by a killed process is never re-leased, and its dedupe key blocks that unit of work
+forever. The design named SQS as the production equivalent without noticing that the property
+being relied on (visibility-timeout redelivery) had no local implementation. A lease timeout
+and a startup reclaim now provide it.
+
+**Kill switch (§6).** "SIGTERM drains in-flight work rather than orphaning worktrees" is
+simply false as built — Ctrl-C orphaned both worktrees and leases. Rather than add signal
+handling, recovery moved to startup, which is strictly more robust: it also covers a power
+loss or a `kill -9`, neither of which any handler can catch. The trade-off is that wreckage
+is visible between the crash and the next start.
+
+**Scope enforcement (§6).** The design listed only the gate-side check. The tool-call-time
+`can_use_tool` guard added in the plan turned out not to fire at all, because listing a write
+tool in `allowed_tools` auto-approves it before the callback runs. Had the design's
+gate-only rail been the whole story this would not have mattered; because the plan advertised
+prevention *and* detection while delivering only detection, it was worth catching. Both layers
+now work, and they are not redundant: `Bash` is pre-approved and can write via a shell
+redirect, which only the gate sees.
+
+**What held.** Disjoint write scopes, the merge gate's scope-then-tests ordering, the
+deterministic routing table, worktree isolation, and the ledger all behaved as designed. The
+cascade was observed working end to end: a hook-published commit woke the reviewer, its
+`review:` commit was correctly skipped by the git sensor rather than triggering a self-review
+loop.
