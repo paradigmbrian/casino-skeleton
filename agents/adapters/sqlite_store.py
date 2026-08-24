@@ -4,8 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from agents.ports import EventBus, WorkQueue
-from agents.types import Event, Task, utcnow
+from agents.ports import EventBus, RunStore, WorkQueue
+from agents.types import Event, RunRecord, Task, utcnow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -58,13 +58,16 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
-class SqliteStore(EventBus, WorkQueue):
+class SqliteStore(EventBus, WorkQueue, RunStore):
     """All three ports over one file, because one file is easier to inspect
     live during a demo than three services."""
 
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, ledger_path: Path | str | None = None):
         self.db_path = Path(db_path)
+        self.ledger_path = Path(ledger_path) if ledger_path else None
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.ledger_path:
+            self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
 
@@ -178,3 +181,65 @@ class SqliteStore(EventBus, WorkQueue):
         counts = {"queued": 0, "leased": 0, "done": 0, "dead": 0}
         counts.update({r["state"]: r["n"] for r in rows})
         return counts
+
+    # ---------------- RunStore ----------------
+
+    def record(self, run: RunRecord) -> None:
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO runs (run_id, worker, event_type, task_id, branch, status,"
+                " started_at, ended_at, cost_usd, num_turns, files_changed, summary, error)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(run_id) DO UPDATE SET"
+                "   status=excluded.status, ended_at=excluded.ended_at,"
+                "   cost_usd=excluded.cost_usd, num_turns=excluded.num_turns,"
+                "   files_changed=excluded.files_changed, summary=excluded.summary,"
+                "   error=excluded.error",
+                (run.run_id, run.worker, run.event_type, run.task_id, run.branch, run.status,
+                 run.started_at, run.ended_at, run.cost_usd, run.num_turns,
+                 json.dumps(list(run.files_changed)), run.summary, run.error),
+            )
+        if self.ledger_path:
+            payload = {**run.__dict__, "files_changed": list(run.files_changed),
+                       "logged_at": utcnow()}
+            with self.ledger_path.open("a") as fh:
+                fh.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _row_to_run(row: sqlite3.Row) -> RunRecord:
+        return RunRecord(
+            run_id=row["run_id"], worker=row["worker"], event_type=row["event_type"],
+            task_id=row["task_id"], branch=row["branch"], status=row["status"],
+            started_at=row["started_at"], ended_at=row["ended_at"],
+            cost_usd=row["cost_usd"], num_turns=row["num_turns"],
+            files_changed=tuple(json.loads(row["files_changed"])),
+            summary=row["summary"], error=row["error"],
+        )
+
+    def recent(self, limit: int = 20) -> list[RunRecord]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM runs ORDER BY started_at DESC, rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def cost_since(self, iso_timestamp: str) -> float:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) total FROM runs WHERE started_at >= ?",
+                (iso_timestamp,),
+            ).fetchone()
+        return float(row["total"])
+
+    def get_meta(self, key: str) -> str | None:
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
