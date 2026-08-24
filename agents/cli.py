@@ -56,18 +56,29 @@ def format_events(store: SqliteStore, limit: int) -> str:
     return "\n".join(out)
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    # -v is declared on both the top-level parser and every subcommand, so
+    # `agents -v up` and `agents up -v` both work. argparse otherwise binds a
+    # top-level flag strictly before the subcommand, which is not how anyone types it.
+    # The subcommand copy uses SUPPRESS so that omitting -v after the subcommand
+    # leaves the attribute unset rather than overwriting a -v given before it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS)
+
     parser = argparse.ArgumentParser(prog="agents", description="Autonomous agent layer")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("up", help="run the supervisor until stopped")
-    sub.add_parser("status", help="queue depth, recent runs, spend")
-    events = sub.add_parser("events", help="recent events")
+    sub.add_parser("up", help="run the supervisor until stopped", parents=[common])
+    sub.add_parser("status", help="queue depth, recent runs, spend", parents=[common])
+    events = sub.add_parser("events", help="recent events", parents=[common])
     events.add_argument("--limit", type=int, default=30)
     events.add_argument("--follow", action="store_true")
-    sub.add_parser("stop", help="ask a running supervisor to drain and exit")
+    sub.add_parser("stop", help="ask a running supervisor to drain and exit", parents=[common])
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     _setup_logging(args.verbose)
 
     if args.command == "up":

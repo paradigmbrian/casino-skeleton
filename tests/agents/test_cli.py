@@ -22,3 +22,15 @@ def test_status_is_readable_when_nothing_has_happened(tmp_path):
     out = format_status(SqliteStore(tmp_path / "t.db"))
     assert "queued=0" in out
     assert "no runs yet" in out.lower()
+
+
+def test_verbose_is_accepted_before_and_after_the_subcommand():
+    """argparse binds a top-level flag strictly before the subcommand, so -v is
+    declared on both -- `agents up -v` is how it actually gets typed."""
+    import argparse
+    import pytest
+    from agents.cli import build_parser
+
+    for argv in (["-v", "status"], ["status", "-v"], ["events", "-v", "--limit", "5"]):
+        assert build_parser().parse_args(argv).verbose is True
+    assert build_parser().parse_args(["status"]).verbose is False
