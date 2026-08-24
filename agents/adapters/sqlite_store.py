@@ -4,8 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from agents.ports import EventBus
-from agents.types import Event, utcnow
+from agents.ports import EventBus, WorkQueue
+from agents.types import Event, Task, utcnow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
-class SqliteStore(EventBus):
+class SqliteStore(EventBus, WorkQueue):
     """All three ports over one file, because one file is easier to inspect
     live during a demo than three services."""
 
@@ -107,3 +107,74 @@ class SqliteStore(EventBus):
             )
             for r in rows
         ]
+
+    # ---------------- WorkQueue ----------------
+
+    def enqueue(self, task: Task) -> bool:
+        """False when identical work is already queued or leased. The partial
+        unique index on dedupe_key does the enforcing, so two orchestrator
+        instances cannot race past it."""
+        payload = json.dumps(
+            {
+                "id": task.event.id, "type": task.event.type, "payload": task.event.payload,
+                "depth": task.event.depth, "source": task.event.source,
+                "created_at": task.event.created_at,
+            },
+            sort_keys=True,
+        )
+        try:
+            with self._conn() as c:
+                c.execute(
+                    "INSERT INTO tasks (id, worker, event_json, dedupe_key, state, attempts, created_at)"
+                    " VALUES (?, ?, ?, ?, 'queued', 0, ?)",
+                    (task.id, task.worker, payload, task.dedupe_key, utcnow()),
+                )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    @staticmethod
+    def _row_to_task(row: sqlite3.Row) -> Task:
+        raw = json.loads(row["event_json"])
+        return Task(
+            id=row["id"], worker=row["worker"], dedupe_key=row["dedupe_key"],
+            attempts=row["attempts"], event=Event(**raw),
+        )
+
+    def lease(self) -> Task | None:
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT * FROM tasks WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 1"
+            ).fetchone()
+            if row is None:
+                c.execute("COMMIT")
+                return None
+            c.execute(
+                "UPDATE tasks SET state='leased', leased_at=?, attempts=attempts+1 WHERE id=?",
+                (utcnow(), row["id"]),
+            )
+            updated = c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+            c.execute("COMMIT")
+        return self._row_to_task(updated)
+
+    def ack(self, task_id: str) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE tasks SET state='done' WHERE id=?", (task_id,))
+
+    def nack(self, task_id: str, max_attempts: int) -> str:
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT attempts FROM tasks WHERE id=?", (task_id,)).fetchone()
+            attempts = row["attempts"] if row else max_attempts
+            state = "dead" if attempts >= max_attempts else "queued"
+            c.execute("UPDATE tasks SET state=? WHERE id=?", (state, task_id))
+            c.execute("COMMIT")
+        return "dead_lettered" if state == "dead" else "requeued"
+
+    def depth(self) -> dict[str, int]:
+        with self._conn() as c:
+            rows = c.execute("SELECT state, COUNT(*) n FROM tasks GROUP BY state").fetchall()
+        counts = {"queued": 0, "leased": 0, "done": 0, "dead": 0}
+        counts.update({r["state"]: r["n"] for r in rows})
+        return counts
