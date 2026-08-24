@@ -34,3 +34,46 @@ def test_verbose_is_accepted_before_and_after_the_subcommand():
     for argv in (["-v", "status"], ["status", "-v"], ["events", "-v", "--limit", "5"]):
         assert build_parser().parse_args(argv).verbose is True
     assert build_parser().parse_args(["status"]).verbose is False
+
+
+def test_verbose_does_not_turn_on_the_sdk_firehose():
+    """-v used to set the *root* logger to DEBUG, which buried four useful lines
+    per run under SDK transport and asyncio chatter."""
+    import logging
+    from agents.cli import configure_logging
+
+    configure_logging(verbose=True, debug_sdk=False, log_format="text", stream=None)
+    assert logging.getLogger("agents").level == logging.DEBUG
+    for noisy in ("claude_agent_sdk", "asyncio", "httpx"):
+        assert logging.getLogger(noisy).level >= logging.WARNING
+
+
+def test_debug_sdk_opts_into_the_firehose():
+    import logging
+    from agents.cli import configure_logging
+
+    configure_logging(verbose=True, debug_sdk=True, log_format="text", stream=None)
+    assert logging.getLogger("claude_agent_sdk").level == logging.DEBUG
+
+
+def test_json_format_is_still_available_for_machines():
+    import io
+    import json
+    import logging
+    from agents.cli import configure_logging
+    from agents.logfmt import event_kwargs
+
+    stream = io.StringIO()
+    configure_logging(verbose=False, debug_sdk=False, log_format="json", stream=stream)
+    logging.getLogger("agents.test").info("ignored", extra=event_kwargs("merged", "reviewer", "x"))
+    payload = json.loads(stream.getvalue().strip().splitlines()[-1])
+    assert payload["kind"] == "merged"
+    assert payload["actor"] == "reviewer"
+
+
+def test_default_level_keeps_our_own_logger_at_info():
+    import logging
+    from agents.cli import configure_logging
+
+    configure_logging(verbose=False, debug_sdk=False, log_format="text", stream=None)
+    assert logging.getLogger("agents").level == logging.INFO

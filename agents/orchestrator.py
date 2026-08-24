@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from agents.config import HOURLY_BUDGET_USD, MAX_CASCADE_DEPTH, ROUTES
+from agents.logfmt import event_kwargs
 from agents.ports import EventBus, RunStore, WorkQueue
 from agents.types import Event, Task
 
@@ -59,8 +60,10 @@ class Orchestrator:
                     source="orchestrator",
                 ))
                 self._budget_notice_sent = True
-                LOG.warning("hourly budget exhausted ($%.2f spent); holding pending events",
-                            self._spent_this_hour())
+                LOG.warning("", extra=event_kwargs(
+                    "budget", "orchestrator",
+                    f"hourly ceiling reached (${self._spent_this_hour():.2f} of "
+                    f"${self.hourly_budget_usd:.2f}); holding pending events"))
             return []
         self._budget_notice_sent = False
 
@@ -80,7 +83,8 @@ class Orchestrator:
                 continue
             task = Task(worker=worker, event=event, dedupe_key=event.dedupe_key())
             if self.store.enqueue(task):
-                LOG.info("dispatched %s -> %s (depth %d)", event.type, worker, event.depth)
+                LOG.info("", extra=event_kwargs(
+                    "dispatch", event.type, f"→ {worker}   depth {event.depth}"))
                 dispatched.append(task)
             else:
                 LOG.debug("deduped %s -> %s", event.type, worker)

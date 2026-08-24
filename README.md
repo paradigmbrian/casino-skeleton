@@ -36,6 +36,22 @@ While it runs, in another terminal:
 `stop` writes `agents/state/STOP`, which every loop checks. In-flight work finishes; nothing
 new is dispatched.
 
+The supervisor logs one aligned line per event — dispatches, run starts, sensor output, and
+outcomes with their cost — so a cascade is readable as it happens:
+
+```
+21:19:12  ▶ up       supervisor            2 worker slot(s), 4 sensor(s)
+21:19:12  ▸ dispatch commit.pushed         → reviewer   depth 0
+21:19:12  ● start    reviewer              agent/reviewer-ef2360f8
+21:19:25  · sensor   CoverageSensor        1 event(s): coverage.gap
+21:21:43  ✗ BUDGET   reviewer              $0.75  17t
+21:22:07  ✓ MERGED   reviewer              $0.72  18t  docs/reviews/dd43412.md
+```
+
+`-v` widens the agent layer's own logging only. The SDK's transport internals are a separate
+opt-in (`--debug-sdk`) because at DEBUG they bury the handful of lines that matter.
+`--log-format json` restores machine-readable output, carrying the same structured fields.
+
 ## The agents and their triggers
 
 | Worker | Trigger event | Emitted by | Write scope | What it does |

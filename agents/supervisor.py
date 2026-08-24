@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agents import config
 from agents.adapters.sqlite_store import SqliteStore
+from agents.logfmt import event_kwargs
 from agents.merge_gate import MergeGate
 from agents.orchestrator import Orchestrator, parse_handoffs
 from agents.sensors.anomaly import AnomalySensor
@@ -55,15 +56,18 @@ class Supervisor:
         requeued = self.store.reclaim_expired_leases(
             timeout_s=0, max_attempts=config.MAX_TASK_ATTEMPTS)
         if requeued:
-            LOG.info("reclaimed %d abandoned lease(s)", len(requeued))
+            LOG.info("", extra=event_kwargs("recover", "leases",
+                                            f"{len(requeued)} abandoned, requeued"))
 
         closed = self.store.close_dangling_runs()
         if closed:
-            LOG.info("closed %d interrupted run record(s)", len(closed))
+            LOG.info("", extra=event_kwargs("recover", "runs",
+                                            f"{len(closed)} interrupted, closed out"))
 
         parked = self.worktrees.park_orphans()
         if parked:
-            LOG.info("parked %d orphaned worktree(s): %s", len(parked), ", ".join(parked))
+            LOG.info("", extra=event_kwargs("recover", "worktrees",
+                                            f"parked {', '.join(parked)}"))
 
     # ------------------------------------------------------------------ run one
 
@@ -76,7 +80,7 @@ class Supervisor:
                            task_id=task.id, branch=wt.branch, status="dispatched",
                            started_at=utcnow())
         self.store.record(record)
-        LOG.info("[%s] %s starting on %s", run_id, spec.name, wt.branch)
+        LOG.info("", extra=event_kwargs("start", spec.name, wt.branch))
 
         outcome = await self.agent_runner(spec, task_brief(task.event), wt.path)
 
@@ -88,8 +92,12 @@ class Supervisor:
                 files_changed=tuple(files), summary=outcome.summary, error=error,
             )
             self.store.record(final)
-            LOG.info("[%s] %s -> %s ($%.4f, %d turns)", run_id, spec.name, status,
-                     outcome.cost_usd, outcome.num_turns)
+            kind = {"merged": "merged", "budget_exhausted": "budget",
+                    "scope_rejected": "rejected", "max_turns": "budget"}.get(status, "failed")
+            files = ("  " + ", ".join(final.files_changed[:2])) if final.files_changed else ""
+            LOG.info("", extra=event_kwargs(
+                kind, spec.name,
+                f"${outcome.cost_usd:.2f}  {outcome.num_turns:>2}t{files}"))
             return final
 
         # A run can end at a limit *after* the agent finished and committed --
@@ -103,8 +111,9 @@ class Supervisor:
             self.worktrees.retire(wt)
             return finish(outcome.status, error=outcome.error)
         if not clean_finish:
-            LOG.info("[%s] %s ended %s but had committed work; gating it anyway",
-                     run_id, spec.name, outcome.status)
+            LOG.info("", extra=event_kwargs(
+                "salvaged", spec.name,
+                f"ended {outcome.status} but had committed work; gating it anyway"))
 
         # Cross-worker handoffs are published whether or not the merge succeeds:
         # the investigator's value is the finding, not the file it wrote.
@@ -135,11 +144,11 @@ class Supervisor:
             self.store.ack(task.id)
             return
         if status in TERMINAL_STATUSES:
-            LOG.warning("task %s ended %s; dead-lettering rather than retrying",
-                        task.id, status)
+            LOG.info("", extra=event_kwargs(
+                "failed", task.worker, f"{status}; dead-lettered (a retry hits the same wall)"))
             self.store.nack(task.id, max_attempts=0)  # 0 => terminal on this attempt
             return
-        LOG.warning("task %s ended %s; requeuing", task.id, status)
+        LOG.info("", extra=event_kwargs("failed", task.worker, f"{status}; requeued"))
         self.store.nack(task.id, config.MAX_TASK_ATTEMPTS)
 
     # ------------------------------------------------------------------ loops
@@ -160,7 +169,10 @@ class Supervisor:
                 for event in events:
                     self.store.publish(event)
                 if events:
-                    LOG.info("%s produced %d event(s)", type(sensor).__name__, len(events))
+                    LOG.info("", extra=event_kwargs(
+                        "sensor", type(sensor).__name__,
+                        f"{len(events)} event(s): " + ", ".join(
+                            sorted({e.type for e in events}))))
             await asyncio.sleep(1.0)
 
     async def _sim_loop(self) -> None:
@@ -192,8 +204,9 @@ class Supervisor:
                 self.store.nack(task.id, config.MAX_TASK_ATTEMPTS)
 
     async def run(self) -> None:
-        LOG.info("supervisor up: %d worker slot(s), %d sensor(s)",
-                 self.max_concurrency, len(self.sensors))
+        LOG.info("", extra=event_kwargs(
+            "up", "supervisor",
+            f"{self.max_concurrency} worker slot(s), {len(self.sensors)} sensor(s)"))
         self.recover()
         coros = [self._sensor_loop(), self._sim_loop(), self._dispatch_loop()]
         coros += [self._worker_loop(i) for i in range(self.max_concurrency)]
@@ -202,7 +215,7 @@ class Supervisor:
             await asyncio.gather(*coros)
         finally:
             stop_watch.cancel()
-            LOG.info("supervisor down")
+            LOG.info("", extra=event_kwargs("up", "supervisor", "down"))
 
     async def _watch_stop_flag(self) -> None:
         while not self.stopping:
