@@ -1,22 +1,39 @@
 #!/usr/bin/env bash
-# Publishes commit.pushed the instant a commit lands, so the reviewer wakes in
-# under a second. The GitSensor poller reconciles anything this misses (for
-# example commits made while the layer was down); duplicate delivery is harmless
-# because the dedupe key is the SHA.
+# Publishes commit.pushed the instant a commit lands on main, so the reviewer
+# wakes in under a second. GitSensor reconciles anything this misses (commits
+# made while the layer was down); duplicate delivery is harmless because the
+# dedupe key is the SHA.
 set -euo pipefail
+
+# Hooks are shared with linked worktrees, so this fires for a worker committing
+# inside its own worktree too. That work has not landed on main -- the merge gate
+# decides whether it ever does -- and `--show-toplevel` there points at the
+# worktree, where .venv does not exist. Leave quietly.
+[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 exec "$REPO_ROOT/.venv/bin/python" - <<'PY'
 import subprocess
+import sys
+
 from agents.adapters.sqlite_store import SqliteStore
-from agents.config import DB_PATH, LEDGER_PATH
+from agents.config import DB_PATH, LEDGER_PATH, REPO_ROOT
+from agents.sensors.git import describe, is_self_authored
 from agents.types import Event
 
 sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-subject = subprocess.run(["git", "log", "-1", "--pretty=%s"], capture_output=True, text=True).stdout.strip()
-if not subject.startswith("review:"):
-    SqliteStore(DB_PATH, ledger_path=LEDGER_PATH).publish(
-        Event(type="commit.pushed",
-              payload={"sha": sha, "short_sha": sha[:8], "subject": subject},
-              source="post_commit_hook")
-    )
+if not sha:
+    sys.exit(0)
+
+# The same predicate the poller uses. A merge lands under a git-generated
+# subject, so testing that subject would let the reviewer's own output back
+# through and start an unbounded review-of-a-review loop.
+if is_self_authored(REPO_ROOT, sha):
+    sys.exit(0)
+
+SqliteStore(DB_PATH, ledger_path=LEDGER_PATH).publish(
+    Event(type="commit.pushed",
+          payload={"sha": sha, "short_sha": sha[:8], "subject": describe(REPO_ROOT, sha)},
+          source="post_commit_hook")
+)
 PY

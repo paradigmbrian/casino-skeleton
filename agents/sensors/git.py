@@ -12,6 +12,40 @@ META_KEY = "git.last_sha"
 SELF_AUTHORED_PREFIXES = ("review:",)  # the reviewer must not review itself
 
 
+def introduced_subjects(repo_root: Path, sha: str) -> list[str]:
+    """The subjects a commit actually *introduces*.
+
+    For an ordinary commit that is its own subject. For a merge it is the
+    subjects of the commits coming in from the merged side, because the merge's
+    own subject is written by git ("Merge branch 'agent/reviewer-x'") and says
+    nothing about who authored the work."""
+    header = run_git(repo_root, "rev-list", "--parents", "-n", "1", sha).stdout.split()
+    is_merge = len(header) > 2  # sha + two or more parents
+    if is_merge:
+        out = run_git(repo_root, "log", "--no-merges", "--pretty=%s",
+                      f"{sha}^1..{sha}").stdout
+        return [line for line in out.splitlines() if line.strip()]
+    return [run_git(repo_root, "log", "-1", "--pretty=%s", sha).stdout.strip()]
+
+
+def describe(repo_root: Path, sha: str) -> str:
+    """What a commit brings in, phrased for a worker's task brief. A merge's own
+    subject ("Merge branch 'agent/test-author-y'") says nothing useful."""
+    return "; ".join(introduced_subjects(repo_root, sha))
+
+
+def is_self_authored(repo_root: Path, sha: str) -> bool:
+    """True when everything a commit brings in was written by the reviewer.
+
+    Matching the merge commit's own subject is not enough: the merge gate lands
+    every branch with `git merge --no-ff`, so the reviewer's work arrives under a
+    git-generated subject and slips past a prefix test. That produced a genuine
+    unbounded loop -- reviewer reviews its own review, forever, each merge
+    carrying a fresh SHA so dedupe never catches it."""
+    subjects = introduced_subjects(repo_root, sha)
+    return bool(subjects) and all(s.startswith(SELF_AUTHORED_PREFIXES) for s in subjects)
+
+
 class GitSensor:
     """Push plus reconcile. The post-commit hook publishes immediately; this
     poller catches anything committed while the layer was down."""
@@ -32,19 +66,23 @@ class GitSensor:
         if last == head:
             return []
 
-        out = run_git(self.repo_root, "log", "--reverse", "--pretty=%H%x1f%s",
-                      f"{last}..{head}").stdout
+        # --first-parent walks what actually landed on main. Without it a merged
+        # branch is announced twice -- once for its own commits, once for the
+        # merge that lands them -- and the same work is reviewed twice.
+        out = run_git(self.repo_root, "log", "--reverse", "--first-parent",
+                      "--pretty=%H", f"{last}..{head}").stdout
         self.store.set_meta(META_KEY, head)
 
         events: list[Event] = []
-        for line in out.splitlines():
-            if not line.strip():
+        for sha in (line.strip() for line in out.splitlines()):
+            if not sha:
                 continue
-            sha, _, subject = line.partition("\x1f")
-            if subject.startswith(SELF_AUTHORED_PREFIXES):
+            if is_self_authored(self.repo_root, sha):
                 LOG.debug("skipping self-authored commit %s", sha[:8])
                 continue
-            events.append(Event(type="commit.pushed",
-                                payload={"sha": sha, "short_sha": sha[:8], "subject": subject},
-                                source="git_sensor"))
+            events.append(Event(
+                type="commit.pushed",
+                payload={"sha": sha, "short_sha": sha[:8],
+                         "subject": describe(self.repo_root, sha)},
+                source="git_sensor"))
         return events

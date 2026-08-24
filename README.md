@@ -193,6 +193,30 @@ adapter implemented no equivalent. `Supervisor.recover()` now runs at startup an
 timeout sweeps mid-flight, and the same interrupt also left orphaned worktrees and run
 records stuck at `dispatched`, both of which are now cleaned up.
 
+**The reviewer found an unbounded loop in its own trigger — and it was real.** The rule
+"the reviewer never reviews its own commits" was implemented as a subject-prefix test for
+`review:`. But the merge gate lands every branch with `git merge --no-ff`, so the reviewer's
+work arrives on `main` under a subject *git* writes — `Merge branch 'agent/reviewer-x'` —
+which sails past the filter. Reviewer reviews its own review, whose merge triggers another
+review, forever; every merge carries a fresh SHA, so dedupe never breaks the cycle either.
+The review documenting this replayed the filter over real history to show two turns of the
+loop already in `main`, and noted the second-order cost: a reviewer handed a merge containing
+only a markdown file has nothing in `casino/` to examine, so it either reports nothing or
+reaches for marginal findings to justify the run.
+
+Fixed by dereferencing the merge — judging a commit by the subjects it actually *introduces*,
+not the one git generated — and by walking `--first-parent`, since without that a merged
+branch was announced twice over (once for its own commits, once for the merge landing them)
+and the same work was reviewed twice. The hook and the poller now share one predicate, which
+was the review's own closing warning.
+
+**The post-commit hook had never worked inside a worktree.** Git shares `.git/hooks` with
+linked worktrees, so the hook fired on every worker's own commits, where `--show-toplevel`
+points at the worktree and `.venv` does not exist. It failed silently there, which is why
+nobody noticed — and which was lucky, because had it *succeeded* it would have announced
+unmerged branch commits as having landed on `main`. It now exits quietly unless it is running
+in the primary checkout. Also found by the reviewer.
+
 **The budget guard silently stopped counting.** When a worker hits its per-run
 `max_budget_usd`, the SDK raises `ResultError` *instead of* yielding a `ResultMessage` — so
 the generic exception handler recorded a run that had spent its entire cap as costing
