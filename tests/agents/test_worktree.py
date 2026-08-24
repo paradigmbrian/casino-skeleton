@@ -45,3 +45,29 @@ def test_cleanup_is_safe_to_call_twice(temp_repo, tmp_path):
     wt = mgr.create("reviewer")
     mgr.cleanup(wt)
     mgr.cleanup(wt)  # must not raise
+
+
+def test_park_orphans_keeps_branches_that_carry_work(temp_repo, tmp_path):
+    mgr = make_manager(temp_repo, tmp_path)
+    wt = mgr.create("reviewer")
+    (wt.path / "casino" / "hand.py").write_text("VALUE = 22\n")
+    git(wt.path, "commit", "-qam", "review: a real change")
+
+    assert mgr.park_orphans() == [wt.branch]
+    assert not wt.path.exists()
+    assert wt.branch in git(temp_repo, "branch", "--list", wt.branch)
+
+
+def test_park_orphans_deletes_branches_with_nothing_on_them(temp_repo, tmp_path):
+    """An interrupted run leaves a branch identical to main. There is nothing
+    to inspect on it, and kept forever they pile up one per crash."""
+    mgr = make_manager(temp_repo, tmp_path)
+    wt = mgr.create("reviewer")
+
+    assert mgr.park_orphans() == []
+    assert not wt.path.exists()
+    assert git(temp_repo, "branch", "--list", wt.branch) == ""
+
+
+def test_park_orphans_is_a_noop_when_nothing_was_left_behind(temp_repo, tmp_path):
+    assert make_manager(temp_repo, tmp_path).park_orphans() == []

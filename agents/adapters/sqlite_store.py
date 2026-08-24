@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agents.ports import EventBus, RunStore, WorkQueue
@@ -175,6 +176,25 @@ class SqliteStore(EventBus, WorkQueue, RunStore):
             c.execute("COMMIT")
         return "dead_lettered" if state == "dead" else "requeued"
 
+    def reclaim_expired_leases(self, timeout_s: int, max_attempts: int) -> list[str]:
+        """Redeliver work whose holder died. Without this a supervisor killed
+        mid-run leaves its task leased forever, and because the dedupe index
+        covers leased rows, that unit of work can never be enqueued again.
+        This is the local stand-in for an SQS visibility timeout."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=timeout_s)).isoformat()
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            rows = c.execute(
+                "SELECT id, attempts FROM tasks WHERE state='leased' AND leased_at < ?",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                state = "dead" if row["attempts"] >= max_attempts else "queued"
+                c.execute("UPDATE tasks SET state=?, leased_at=NULL WHERE id=?",
+                          (state, row["id"]))
+            c.execute("COMMIT")
+        return [r["id"] for r in rows]
+
     def depth(self) -> dict[str, int]:
         with self._conn() as c:
             rows = c.execute("SELECT state, COUNT(*) n FROM tasks GROUP BY state").fetchall()
@@ -230,6 +250,20 @@ class SqliteStore(EventBus, WorkQueue, RunStore):
                 (iso_timestamp,),
             ).fetchone()
         return float(row["total"])
+
+    def close_dangling_runs(self, status: str = "interrupted") -> list[str]:
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            rows = c.execute("SELECT run_id FROM runs WHERE ended_at IS NULL").fetchall()
+            if rows:
+                c.executemany(
+                    "UPDATE runs SET status=?, ended_at=?, error=COALESCE(error, ?)"
+                    " WHERE run_id=?",
+                    [(status, utcnow(), "supervisor exited before this run finished",
+                      r["run_id"]) for r in rows],
+                )
+            c.execute("COMMIT")
+        return [r["run_id"] for r in rows]
 
     def get_meta(self, key: str) -> str | None:
         with self._conn() as c:

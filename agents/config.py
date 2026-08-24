@@ -24,6 +24,9 @@ ROUTES: dict[str, str] = {
 MAX_CASCADE_DEPTH = 3
 MAX_CONCURRENT_WORKERS = 2
 MAX_TASK_ATTEMPTS = 2
+# Comfortably above the longest WorkerSpec.timeout_s (420s) plus a gate cycle,
+# so a slow-but-alive worker is never redelivered underneath itself.
+LEASE_TIMEOUT_S = 900
 
 # Budget. Per-run is enforced natively by the SDK; hourly is ours.
 HOURLY_BUDGET_USD = 5.00

@@ -40,6 +40,25 @@ class Supervisor:
     def request_stop(self) -> None:
         self.stopping = True
 
+    def recover(self) -> None:
+        """Undo a hard exit. A supervisor killed mid-run leaves three kinds of
+        wreckage: tasks stuck in `leased` (which the dedupe index then blocks
+        forever), worktrees nobody owns, and run records frozen at 'dispatched'.
+        Called at startup, where every leased task is by definition abandoned --
+        no run can be in flight in a process that has not started yet."""
+        requeued = self.store.reclaim_expired_leases(
+            timeout_s=0, max_attempts=config.MAX_TASK_ATTEMPTS)
+        if requeued:
+            LOG.info("reclaimed %d abandoned lease(s)", len(requeued))
+
+        closed = self.store.close_dangling_runs()
+        if closed:
+            LOG.info("closed %d interrupted run record(s)", len(closed))
+
+        parked = self.worktrees.park_orphans()
+        if parked:
+            LOG.info("parked %d orphaned worktree(s): %s", len(parked), ", ".join(parked))
+
     # ------------------------------------------------------------------ run one
 
     async def execute(self, task: Task) -> RunRecord:
@@ -121,6 +140,8 @@ class Supervisor:
     async def _dispatch_loop(self) -> None:
         while not self.stopping:
             try:
+                self.store.reclaim_expired_leases(config.LEASE_TIMEOUT_S,
+                                                  config.MAX_TASK_ATTEMPTS)
                 self.orchestrator.dispatch_pending()
             except Exception:
                 LOG.exception("dispatch failed")
@@ -146,6 +167,7 @@ class Supervisor:
     async def run(self) -> None:
         LOG.info("supervisor up: %d worker slot(s), %d sensor(s)",
                  self.max_concurrency, len(self.sensors))
+        self.recover()
         coros = [self._sensor_loop(), self._sim_loop(), self._dispatch_loop()]
         coros += [self._worker_loop(i) for i in range(self.max_concurrency)]
         stop_watch = asyncio.create_task(self._watch_stop_flag())

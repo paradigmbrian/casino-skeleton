@@ -129,6 +129,12 @@ sqlite3 agents/state/agents.db 'SELECT worker, status, cost_usd FROM runs'
 git log --oneline                                          # what actually landed
 ```
 
+If the supervisor is killed mid-run — Ctrl-C, a crash, a closed laptop — the next start
+recovers: abandoned leases are redelivered, run records frozen at `dispatched` are closed
+out as `interrupted`, and orphaned worktrees are cleared. That reclaim matters more than it
+looks: the dedupe index covers leased rows, so a task stuck in `leased` would otherwise block
+that unit of work from ever being queued again.
+
 A rejected branch is *parked*, not deleted: the worktree is removed but the branch survives,
 so `git log agent/<worker>-<id>` shows exactly what an agent tried to do and the ledger says
 why it was refused.
@@ -161,6 +167,19 @@ violations after the fact.
 *then* checked the budget, so every event held at the ceiling was consumed and discarded — and
 its own `budget.exhausted` notice was swallowed on the next tick. The budget check now runs
 before the drain; over-budget events stay on the bus and dispatch when the hour rolls forward.
+
+**Nothing reclaimed an abandoned lease.** Interrupting the first live run exposed it: two
+tasks sat in `leased` with no holder, and since the dedupe index spans queued *and* leased
+rows, their work was permanently unqueueable — a silent, self-inflicted deadlock that only
+showed up because the process was killed at the wrong moment. The AWS mapping had waved at
+this ("SQS visibility timeout replaces the retry counter") without noticing that the local
+adapter implemented no equivalent. `Supervisor.recover()` now runs at startup and a lease
+timeout sweeps mid-flight, and the same interrupt also left orphaned worktrees and run
+records stuck at `dispatched`, both of which are now cleaned up.
+
+**The `-v` flag was in the wrong place.** `agents up -v` — the form the README documents —
+was an argparse error, because a flag declared on the top-level parser only binds *before*
+the subcommand. It now works in either position.
 
 **The AWS mapping is documentation and was never deployed.** `docs/aws-mapping.md` is written
 against the real ports, and it is explicit about the one thing that does not map cleanly:

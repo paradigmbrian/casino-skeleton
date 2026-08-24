@@ -111,3 +111,78 @@ def test_request_stop_sets_the_flag_the_loop_checks(tmp_path, temp_repo):
     assert sup.stopping is False
     sup.request_stop()
     assert sup.stopping is True
+
+
+def test_recover_requeues_leases_abandoned_by_a_killed_supervisor(tmp_path, temp_repo):
+    """Ctrl-C mid-run leaves the task leased and the run record stuck at
+    'dispatched'. Nothing else reclaims either -- at startup no run can be in
+    flight, so every leased task is by definition abandoned."""
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store, sup = build(tmp_path, temp_repo, gate, OK)
+    task = a_task()
+    store.enqueue(task)
+    store.lease()
+    assert store.depth()["leased"] == 1
+
+    sup.recover()
+
+    assert store.depth()["leased"] == 0
+    assert store.depth()["queued"] == 1
+    assert store.lease().id == task.id
+
+
+def test_recover_parks_worktrees_left_behind_keeping_their_branches(tmp_path, temp_repo):
+    from tests.agents.conftest import git
+
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    _, sup = build(tmp_path, temp_repo, gate, OK)
+    orphan = sup.worktrees.create("reviewer")
+    (orphan.path / "casino" / "hand.py").write_text("VALUE = 22\n")
+    git(orphan.path, "commit", "-qam", "review: work in progress")
+    assert orphan.path.is_dir()
+
+    sup.recover()
+
+    assert not orphan.path.exists()
+    assert orphan.branch in git(temp_repo, "branch", "--list", orphan.branch)
+
+
+def test_recover_discards_a_worktree_whose_agent_never_committed(tmp_path, temp_repo):
+    from tests.agents.conftest import git
+
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    _, sup = build(tmp_path, temp_repo, gate, OK)
+    orphan = sup.worktrees.create("reviewer")
+
+    sup.recover()
+
+    assert not orphan.path.exists()
+    assert git(temp_repo, "branch", "--list", orphan.branch) == ""
+
+
+def test_recover_marks_dangling_run_records_interrupted(tmp_path, temp_repo):
+    from agents.types import RunRecord, utcnow
+
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store, sup = build(tmp_path, temp_repo, gate, OK)
+    store.record(RunRecord(run_id="stuck", worker="reviewer", event_type="commit.pushed",
+                           task_id="t1", branch="agent/reviewer-x", status="dispatched",
+                           started_at=utcnow()))
+
+    sup.recover()
+
+    (rec,) = [r for r in store.recent() if r.run_id == "stuck"]
+    assert rec.status == "interrupted"
+    assert rec.ended_at is not None
+
+
+def test_recover_leaves_finished_runs_alone(tmp_path, temp_repo):
+    from agents.types import RunRecord, utcnow
+
+    gate = FakeGate(GateResult("merged", (), sha="abc"))
+    store, sup = build(tmp_path, temp_repo, gate, OK)
+    store.record(RunRecord(run_id="done", worker="reviewer", event_type="commit.pushed",
+                           task_id="t1", branch="b", status="merged",
+                           started_at=utcnow(), ended_at=utcnow()))
+    sup.recover()
+    assert [r for r in store.recent() if r.run_id == "done"][0].status == "merged"

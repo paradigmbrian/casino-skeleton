@@ -33,6 +33,11 @@ class WorkQueue(ABC):
         """Returns 'requeued' or 'dead_lettered'."""
 
     @abstractmethod
+    def reclaim_expired_leases(self, timeout_s: int, max_attempts: int) -> list[str]:
+        """Redeliver work whose holder died. SQS does this natively via the
+        visibility timeout, so the AWS adapter is a no-op."""
+
+    @abstractmethod
     def depth(self) -> dict[str, int]: ...
 
 
@@ -47,6 +52,11 @@ class RunStore(ABC):
 
     @abstractmethod
     def cost_since(self, iso_timestamp: str) -> float: ...
+
+    @abstractmethod
+    def close_dangling_runs(self, status: str = "interrupted") -> list[str]:
+        """Runs still open when the process died. Left alone they sit at
+        'dispatched' forever and the ledger stops being reconstructable."""
 
     @abstractmethod
     def get_meta(self, key: str) -> str | None: ...

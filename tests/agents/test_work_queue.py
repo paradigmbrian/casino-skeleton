@@ -65,3 +65,50 @@ def test_lease_is_fifo_across_distinct_work(store):
     store.enqueue(make_task("casino/b.py"))
     assert store.lease().event.payload["module"] == "casino/a.py"
     assert store.lease().event.payload["module"] == "casino/b.py"
+
+
+def age_lease(store, task_id, seconds):
+    """Backdate a lease so it looks abandoned."""
+    from datetime import datetime, timedelta, timezone
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+    with store._conn() as c:
+        c.execute("UPDATE tasks SET leased_at=? WHERE id=?", (stale, task_id))
+
+
+def test_an_abandoned_lease_is_reclaimed_and_leasable_again(store):
+    """A supervisor killed mid-run leaves its task leased forever otherwise --
+    and the dedupe index covers leased rows, so the work is blocked permanently."""
+    task = make_task()
+    store.enqueue(task)
+    store.lease()
+    assert store.lease() is None            # still held
+    age_lease(store, task.id, seconds=1000)
+    assert store.reclaim_expired_leases(timeout_s=900, max_attempts=3) == [task.id]
+    reclaimed = store.lease()
+    assert reclaimed is not None and reclaimed.id == task.id
+
+
+def test_a_fresh_lease_is_never_reclaimed(store):
+    store.enqueue(make_task())
+    store.lease()
+    assert store.reclaim_expired_leases(timeout_s=900, max_attempts=3) == []
+    assert store.depth()["leased"] == 1
+
+
+def test_an_abandoned_lease_past_its_attempts_is_dead_lettered_not_requeued(store):
+    task = make_task()
+    store.enqueue(task)
+    store.lease()
+    age_lease(store, task.id, seconds=1000)
+    assert store.reclaim_expired_leases(timeout_s=900, max_attempts=1) == [task.id]
+    assert store.lease() is None
+    assert store.depth()["dead"] == 1
+
+
+def test_reclaiming_frees_the_dedupe_key_for_dead_lettered_work(store):
+    task = make_task()
+    store.enqueue(task)
+    store.lease()
+    age_lease(store, task.id, seconds=1000)
+    store.reclaim_expired_leases(timeout_s=900, max_attempts=1)
+    assert store.enqueue(make_task()) is True   # the same work may be attempted afresh
