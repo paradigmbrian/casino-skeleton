@@ -29,7 +29,7 @@ MAX_TASK_ATTEMPTS = 2
 LEASE_TIMEOUT_S = 900
 
 # Budget. Per-run is enforced natively by the SDK; hourly is ours.
-HOURLY_BUDGET_USD = 5.00
+HOURLY_BUDGET_USD = 10.00
 
 # Sensor cadences, seconds.
 GIT_POLL_S = 10

@@ -256,8 +256,10 @@ went further.
 **Per-run budgets were set too tight.** The one review that succeeded used **$0.72 of a
 $0.75 cap** across 18 turns — it barely fit, and two sibling reviewers hit the wall. Caps are
 now $1.50 (reviewer), $1.25 (test-author), $1.00 (investigator), $0.75 (dep-updater). The
-`HOURLY_BUDGET_USD` ceiling stays at $5.00 and, now that accounting is honest, actually
-binds — it is the single knob worth turning before a long run.
+`HOURLY_BUDGET_USD` is $10.00 — raised from $5.00 after a real run reached $4.78 in forty
+minutes, which is close enough to the ceiling that the layer would have stalled mid-demo. Now
+that accounting is honest the ceiling genuinely binds, so it is the single knob worth setting
+deliberately before a long run.
 
 **The observed baseline** for the seeded simulator is a **0.4056** player win rate over 5000
 rounds, with zero invariant violations — so the anomaly path depends on real drift rather
